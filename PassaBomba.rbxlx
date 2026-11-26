@@ -1,0 +1,2992 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4"><Item class="Workspace" referent="RBX0"><Properties><string name="Name">Workspace</string></Properties></Item><Item class="ServerScriptService" referent="RBX1"><Properties><string name="Name">ServerScriptService</string></Properties><Item class="Script" referent="RBX2"><Properties><string name="Name">PassaBomba</string><ProtectedString name="Source"><![CDATA[-- PassaBomba (Script) em ServerScriptService. Filhos: PBConfig (ModuleScript) e PBClient (LocalScript)
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunS = game:GetService("RunService")
+local DSS = game:GetService("DataStoreService")
+local MPS = game:GetService("MarketplaceService")
+local Lighting = game:GetService("Lighting")
+local CS = game:GetService("CollectionService")
+
+local CFG = {
+	MinPlayers = 2,       -- minimo para comecar (mude para 1 para testar sozinho)
+	Intermission = 15,
+	BombMin = 14,
+	BombMax = 24,
+	PassCooldown = 1.2,
+	WinCoins = 50,
+	PlayCoins = 5,
+	HolderSpeed = 21,
+	NormalSpeed = 16,
+	BotHolderSpeed = 17,  -- bots um pouco mais lentos para dar chance de fugir
+	BotNormalSpeed = 14,
+	BotWinCoins = 10,     -- partidas com bots dao poucas moedas e nao contam vitoria
+	BotPlayCoins = 1,
+	BurgerCoins = 30,     -- hamburguer do chef: velocidade extra por alguns segundos
+	BurgerTime = 8,
+	BurgerMult = 1.35,
+	DoubleTime = 12,      -- hamburguer duplo (comprado com Robux)
+	DoubleMult = 1.6,
+}
+
+-- instalacao
+local cfgMod = script:WaitForChild("PBConfig")
+cfgMod.Parent = RS
+local clientSrc = script:WaitForChild("PBClient")
+clientSrc.Parent = game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts")
+for _, pl in ipairs(Players:GetPlayers()) do clientSrc:Clone().Parent = pl:WaitForChild("PlayerGui") end
+local CF = require(cfgMod)
+local SkinBy = {}
+for _, s in ipairs(CF.Skins) do SkinBy[s.Id] = s end
+local PackBy = {}
+for _, k in ipairs(CF.CoinPacks) do PackBy[k.Id] = k end
+
+local R = Instance.new("Folder")
+R.Name = "PB"
+R.Parent = RS
+local function ev(n) local e = Instance.new("RemoteEvent"); e.Name = n; e.Parent = R; return e end
+local rState, rMsg, rSkinState, rSkinAct = ev("State"), ev("Msg"), ev("SkinState"), ev("SkinAct")
+local rOpenUI = ev("OpenUI")
+local rBotAct = ev("BotAct")
+local rBanner, rSfx = ev("Banner"), ev("Sfx")
+
+-- ===== mapa: TODAS as pecas com studs em todas as faces =====
+local FACES = { "TopSurface", "BottomSurface", "LeftSurface", "RightSurface", "FrontSurface", "BackSurface" }
+local PLASTIC = Enum.Material.Plastic
+local map = Instance.new("Folder")
+map.Name = "PBMap"
+map.Parent = workspace
+
+local function P(parent, name, size, cf, color, mat, transp)
+	local p = Instance.new("Part")
+	p.Name, p.Size, p.CFrame, p.Color = name, size, cf, color
+	p.Material = mat or PLASTIC
+	p.Anchored = true
+	p.Transparency = transp or 0
+	p.CastShadow = math.max(size.X, size.Y, size.Z) >= 5 -- sombra so em pecas grandes (celular)
+	for _, f in ipairs(FACES) do p[f] = Enum.SurfaceType.Studs end
+	p.Parent = parent
+	return p
+end
+local function sign(part, text, offset, w, h)
+	local b = Instance.new("BillboardGui")
+	b.Size, b.StudsOffset = UDim2.new(0, w or 400, 0, h or 100), Vector3.new(0, offset, 0)
+	b.Parent = part
+	local t = Instance.new("TextLabel")
+	t.Size, t.BackgroundTransparency, t.Text, t.TextScaled = UDim2.new(1, 0, 1, 0), 1, text, true
+	t.Font, t.TextColor3, t.TextStrokeTransparency = Enum.Font.FredokaOne, Color3.new(1, 1, 1), 0
+	t.Parent = b
+end
+
+local oldBase = workspace:FindFirstChild("Baseplate")
+if oldBase then oldBase:Destroy() end
+local oldSpawn = workspace:FindFirstChildOfClass("SpawnLocation")
+if oldSpawn then oldSpawn:Destroy() end
+
+-- ===== lobby estilo Grow a Garden =====
+local WOOD, WOOD2, PATH = Color3.fromRGB(196, 150, 90), Color3.fromRGB(140, 95, 55), Color3.fromRGB(214, 180, 120)
+
+local function makeCapy(scale)
+	local m = Instance.new("Model")
+	m.Name = "Capybara"
+	local function part(nm, sz, off, col)
+		local p = Instance.new("Part")
+		p.Name, p.Size, p.Color, p.Material = nm, sz * scale, col, PLASTIC
+		p.Anchored, p.CanCollide = true, false
+		p.CFrame = CFrame.new(off * scale)
+		for _, f in ipairs(FACES) do p[f] = Enum.SurfaceType.Studs end
+		p.Parent = m
+		return p
+	end
+	local brown, dark = Color3.fromRGB(156, 110, 72), Color3.fromRGB(115, 78, 48)
+	m.PrimaryPart = part("Body", Vector3.new(3, 2.2, 4.4), Vector3.new(0, 0, 0), brown)
+	part("Head", Vector3.new(2.2, 2, 2.2), Vector3.new(0, 0.5, -3), Color3.fromRGB(170, 125, 85))
+	part("Snout", Vector3.new(1.6, 1.2, 1.2), Vector3.new(0, 0.1, -4.3), dark)
+	part("Nose", Vector3.new(0.7, 0.5, 0.4), Vector3.new(0, 0.5, -4.95), Color3.fromRGB(25, 20, 20))
+	for _, sx in ipairs({ -1, 1 }) do
+		part("Eye", Vector3.new(0.35, 0.35, 0.2), Vector3.new(0.75 * sx, 0.9, -4.12), Color3.fromRGB(20, 20, 20))
+		part("Ear", Vector3.new(0.6, 0.6, 0.4), Vector3.new(0.85 * sx, 1.7, -2.6), dark)
+		for _, sz in ipairs({ -1.5, 1.5 }) do
+			part("Leg", Vector3.new(0.9, 1.1, 0.9), Vector3.new(1.0 * sx, -1.65, sz), dark)
+		end
+	end
+	part("Orange", Vector3.new(1, 0.8, 1), Vector3.new(0, 1.8, -3.1), Color3.fromRGB(255, 150, 40))
+	part("Leaf", Vector3.new(0.4, 0.3, 0.4), Vector3.new(0, 2.35, -3.1), Color3.fromRGB(60, 160, 70))
+	return m
+end
+
+for ix = 0, 14 do
+	for iz = 0, 14 do
+		local c = ((ix + iz) % 2 == 0) and Color3.fromRGB(104, 205, 76) or Color3.fromRGB(92, 190, 66)
+		P(map, "Lawn", Vector3.new(10, 2, 10), CFrame.new(-70 + ix * 10, -1, -70 + iz * 10), c)
+	end
+end
+P(map, "Path", Vector3.new(14, 0.2, 150), CFrame.new(0, 0.1, 0), PATH)
+P(map, "Path", Vector3.new(150, 0.2, 14), CFrame.new(0, 0.1, -36), PATH)
+
+-- cerca de madeira
+for _, d in ipairs({ { 0, 76.5, 154, 1 }, { 0, -76.5, 154, 1 }, { 76.5, 0, 1, 154 }, { -76.5, 0, 1, 154 } }) do
+	P(map, "Fence", Vector3.new(d[3], 9, d[4]), CFrame.new(d[1], 4.5, d[2]), WOOD)
+	for k = -76, 76, 19 do
+		local pos = (d[3] > d[4]) and Vector3.new(k, 5, d[2]) or Vector3.new(d[1], 5, k)
+		P(map, "Post", Vector3.new(2, 10.5, 2), CFrame.new(pos), WOOD2)
+	end
+end
+
+-- spawn
+local sp = Instance.new("SpawnLocation")
+sp.Size, sp.CFrame, sp.Anchored, sp.Neutral = Vector3.new(12, 0.2, 12), CFrame.new(0, 0.3, 35), true, true
+sp.Color, sp.Material = Color3.fromRGB(255, 190, 70), PLASTIC
+for _, f in ipairs(FACES) do sp[f] = Enum.SurfaceType.Studs end
+sp.Parent = map
+sign(sp, "PASSA BOMBA", 9)
+sign(sp, "Toque em alguem para passar a bomba!", 4.5, 520, 60)
+
+-- barracas organizadas em fileira
+local function stall(name, x, z, colA, colB)
+	local counter = P(map, "Counter", Vector3.new(12, 3.5, 4), CFrame.new(x, 1.75, z), WOOD2)
+	P(map, "CounterTop", Vector3.new(13, 0.6, 5), CFrame.new(x, 3.8, z), WOOD)
+	for _, dx in ipairs({ -6, 6 }) do P(map, "Post", Vector3.new(1, 10, 1), CFrame.new(x + dx, 5, z - 1.5), WOOD2) end
+	for i = 0, 5 do
+		P(map, "Awning", Vector3.new(2.2, 0.8, 8), CFrame.new(x - 5.5 + i * 2.2, 10.4, z + 0.5) * CFrame.Angles(math.rad(-10), 0, 0), (i % 2 == 0) and colA or colB)
+	end
+	local board = P(map, "Sign", Vector3.new(11, 3, 0.8), CFrame.new(x, 13.2, z - 1.5), Color3.fromRGB(255, 244, 214))
+	sign(board, name, 0, 320, 80)
+	return counter
+end
+local skinCounter = stall("Loja de Skins", -30, -50, Color3.fromRGB(170, 110, 220), Color3.new(1, 1, 1))
+local coinCounter = stall("Loja de Moedas", 0, -50, Color3.fromRGB(255, 190, 40), Color3.new(1, 1, 1))
+local botCounter = stall("Arena dos Bots", -60, -50, Color3.fromRGB(60, 180, 90), Color3.new(1, 1, 1))
+
+-- cercado da capivara
+local pen = Vector3.new(35, 0, -52)
+P(map, "Hay", Vector3.new(18, 0.3, 14), CFrame.new(pen.X, 0.15, pen.Z), Color3.fromRGB(235, 205, 120))
+P(map, "PenFence", Vector3.new(20, 3.5, 1), CFrame.new(pen.X, 1.75, pen.Z - 8), WOOD)
+P(map, "PenFence", Vector3.new(1, 3.5, 16), CFrame.new(pen.X - 10, 1.75, pen.Z), WOOD)
+P(map, "PenFence", Vector3.new(1, 3.5, 16), CFrame.new(pen.X + 10, 1.75, pen.Z), WOOD)
+P(map, "PenFence", Vector3.new(7, 3.5, 1), CFrame.new(pen.X - 6.5, 1.75, pen.Z + 8), WOOD)
+P(map, "PenFence", Vector3.new(7, 3.5, 1), CFrame.new(pen.X + 6.5, 1.75, pen.Z + 8), WOOD)
+local capyNPC = makeCapy(1)
+capyNPC.Parent = map
+capyNPC:PivotTo(CFrame.new(pen.X, 2.2, pen.Z) * CFrame.Angles(0, math.pi, 0))
+sign(capyNPC.PrimaryPart, "Capivara - skin gratis!", 5, 360, 70)
+
+-- quadros: ranking e arenas
+local function board(x, z, text)
+	for _, dx in ipairs({ -7, 7 }) do P(map, "BoardPost", Vector3.new(1, 7, 1), CFrame.new(x + dx, 3.5, z), WOOD2) end
+	local b = P(map, "Board", Vector3.new(16, 9, 1), CFrame.new(x, 8.5, z), Color3.fromRGB(255, 244, 214))
+	local sg = Instance.new("SurfaceGui")
+	sg.Face, sg.CanvasSize, sg.Parent = Enum.NormalId.Back, Vector2.new(800, 450), b
+	local t = Instance.new("TextLabel")
+	t.Size, t.BackgroundTransparency, t.Text, t.TextScaled = UDim2.new(1, -30, 1, -30), 1, text, true
+	t.Position, t.Font, t.TextColor3 = UDim2.new(0, 15, 0, 15), Enum.Font.FredokaOne, Color3.fromRGB(80, 52, 28)
+	t.Parent = sg
+	return t
+end
+local rankLabel = board(-28, -12, "RANKING DE VITORIAS")
+board(28, -12, "ARENAS\nPre-Historia - Lago - Cidade\nRestaurante - Brasil - Praia - Parque\nEVENTO: Dino World")
+
+-- arvores e flores
+for _, t in ipairs({ { -65, -65 }, { 65, -65 }, { -65, 65 }, { 65, 65 }, { -65, 0 }, { 65, 0 }, { -50, 68 }, { 50, 68 } }) do
+	P(map, "Trunk", Vector3.new(3, 12, 3), CFrame.new(t[1], 6, t[2]), Color3.fromRGB(125, 85, 45))
+	P(map, "Leaves", Vector3.new(14, 7, 14), CFrame.new(t[1], 15.5, t[2]), Color3.fromRGB(56, 160, 60))
+	P(map, "Leaves", Vector3.new(9, 5, 9), CFrame.new(t[1], 21.5, t[2]), Color3.fromRGB(72, 180, 70))
+end
+local frng = Random.new(11)
+for _ = 1, 140 do
+	local x, z = frng:NextInteger(-70, 70), frng:NextInteger(-70, 70)
+	if math.abs(x) >= 9 and math.abs(z + 36) >= 9 and z >= -40 and math.abs(z + 10) >= 6 then
+		local stem = P(map, "Stem", Vector3.new(0.4, 1.6, 0.4), CFrame.new(x, 0.8, z), Color3.fromRGB(60, 150, 60))
+		local head = P(map, "Flower", Vector3.new(1.4, 1.4, 1.4), CFrame.new(x, 2.3, z), Color3.fromHSV(frng:NextNumber(), 0.55, 1))
+		stem.CanCollide, head.CanCollide = false, false
+	end
+end
+
+local function makeChef()
+	local m = Instance.new("Model")
+	m.Name = "Chef"
+	local function part(nm, sz, off, col)
+		local p = Instance.new("Part")
+		p.Name, p.Size, p.Color, p.Material = nm, sz, col, PLASTIC
+		p.Anchored, p.CanCollide = true, false
+		p.CFrame = CFrame.new(off)
+		for _, f in ipairs(FACES) do p[f] = Enum.SurfaceType.Studs end
+		p.Parent = m
+		return p
+	end
+	local W, SK = Color3.new(1, 1, 1), Color3.fromRGB(240, 190, 150)
+	local torso = part("Torso", Vector3.new(3.2, 3.4, 1.8), Vector3.new(0, 4.3, 0), W)
+	m.PrimaryPart = torso
+	part("Apron", Vector3.new(3.3, 2.4, 0.3), Vector3.new(0, 3.8, -1), Color3.fromRGB(225, 225, 235))
+	part("Legs", Vector3.new(3, 2.6, 1.6), Vector3.new(0, 1.3, 0), Color3.fromRGB(60, 60, 75))
+	part("Head", Vector3.new(2, 2, 2), Vector3.new(0, 7, 0), SK)
+	part("HatBand", Vector3.new(2.5, 0.6, 2.5), Vector3.new(0, 8, 0), Color3.fromRGB(235, 235, 240))
+	part("Hat", Vector3.new(2.4, 2.6, 2.4), Vector3.new(0, 9.3, 0), W)
+	part("Mustache", Vector3.new(1.4, 0.3, 0.3), Vector3.new(0, 6.6, -1.05), Color3.fromRGB(40, 30, 25))
+	for _, sx in ipairs({ -0.5, 0.5 }) do part("Eye", Vector3.new(0.3, 0.3, 0.2), Vector3.new(sx, 7.2, -1.05), Color3.fromRGB(20, 20, 20)) end
+	part("ArmL", Vector3.new(0.9, 3, 0.9), Vector3.new(-2.1, 4.2, 0), W)
+	local arm = {}
+	arm[#arm + 1] = part("ArmR", Vector3.new(0.9, 3, 0.9), Vector3.new(2.1, 4.2, 0), W)
+	arm[#arm + 1] = part("BunBottom", Vector3.new(1.6, 0.4, 1.6), Vector3.new(2.1, 2.4, -1.1), Color3.fromRGB(215, 150, 70))
+	arm[#arm + 1] = part("Patty", Vector3.new(1.7, 0.35, 1.7), Vector3.new(2.1, 2.78, -1.1), Color3.fromRGB(95, 55, 30))
+	arm[#arm + 1] = part("Lettuce", Vector3.new(1.8, 0.2, 1.8), Vector3.new(2.1, 3.05, -1.1), Color3.fromRGB(80, 200, 70))
+	arm[#arm + 1] = part("BunTop", Vector3.new(1.6, 0.7, 1.6), Vector3.new(2.1, 3.5, -1.1), Color3.fromRGB(225, 160, 80))
+	local rel = {}
+	for _, p in ipairs(arm) do rel[p] = torso.CFrame:Inverse() * p.CFrame end
+	return m, arm, rel
+end
+
+-- ===== arenas =====
+local SIZE = 120
+local arenas = {}
+local phase, status = "waiting", "Esperando jogadores..."
+local alive = {}
+local boost = {}
+local holder, bombPart, holderSkin, bombEnd, bombTotal, passLock = nil, nil, nil, 0, 1, 0
+local conns = {}
+local currentArena, nextArena, lastArena
+local botArena
+local dinoArena, dinoActive, trexRoot, trexReset, chefNPC, chefAnimate, beachArena, parkArena, xmasActive
+local botByModel = {}
+local function isBot(e) return typeof(e) == "table" end
+
+local function newArena(name, center, clock, special)
+	local f = Instance.new("Folder")
+	f.Name = name
+	f.Parent = map
+	local a = { Name = name, Center = center, Folder = f, Clock = clock, Spawns = {} }
+	a.box = function(nm, size, off, color, mat, transp, ry)
+		return P(f, nm, size, CFrame.new(center + off) * CFrame.Angles(0, ry or 0, 0), color, mat, transp)
+	end
+	if not special then arenas[#arenas + 1] = a end
+	return a
+end
+local function walls(a)
+	for _, d in ipairs({ { 0, SIZE / 2 + 1, SIZE + 4, 2 }, { 0, -SIZE / 2 - 1, SIZE + 4, 2 }, { SIZE / 2 + 1, 0, 2, SIZE + 4 }, { -SIZE / 2 - 1, 0, 2, SIZE + 4 } }) do
+		a.box("Wall", Vector3.new(d[3], 40, d[4]), Vector3.new(d[1], 20, d[2]), Color3.fromRGB(190, 220, 255), PLASTIC, 0.55)
+	end
+end
+local eliminate -- definido mais abaixo
+local function hazard(part, why)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		if phase ~= "playing" then return end
+		local m = hit:FindFirstAncestorOfClass("Model")
+		local pl = m and (Players:GetPlayerFromCharacter(m) or botByModel[m])
+		if pl and alive[pl] then eliminate(pl, why) end
+	end)
+end
+
+-- ===== helpers de decoracao =====
+local BONE = Color3.fromRGB(240, 235, 215)
+local function deco(p) p.CanCollide, p.CanTouch, p.CanQuery, p.CastShadow = false, false, false, false return p end
+local function weld(p0, p1)
+	local w = Instance.new("WeldConstraint")
+	w.Part0, w.Part1, w.Parent = p0, p1, p0
+end
+local function plaque(part, text, faces, cw, ch)
+	for _, f in ipairs(faces) do
+		local sg = Instance.new("SurfaceGui")
+		sg.Face, sg.CanvasSize, sg.Parent = f, Vector2.new(cw, ch), part
+		local t = Instance.new("TextLabel")
+		t.Size, t.Position, t.BackgroundTransparency, t.Text, t.TextScaled = UDim2.new(1, -20, 1, -20), UDim2.new(0, 10, 0, 10), 1, text, true
+		t.Font, t.TextColor3, t.TextStrokeTransparency, t.TextStrokeColor3 = Enum.Font.FredokaOne, Color3.new(1, 1, 1), 0, Color3.fromRGB(60, 20, 20)
+		t.Parent = sg
+	end
+end
+local function tree(a, x, z, h, leaf)
+	a.box("Trunk", Vector3.new(2, h, 2), Vector3.new(x, h / 2, z), Color3.fromRGB(120, 80, 40))
+	a.box("Leaves", Vector3.new(9, 6, 9), Vector3.new(x, h + 2, z), leaf or Color3.fromRGB(46, 150, 60))
+	return a.box("Leaves", Vector3.new(6, 4, 6), Vector3.new(x, h + 6, z), leaf or Color3.fromRGB(70, 180, 70))
+end
+local function palm(a, x, z, h)
+	h = h or 14
+	a.box("Trunk", Vector3.new(1.6, h, 1.6), Vector3.new(x, h / 2, z), Color3.fromRGB(150, 110, 60))
+	for i = 0, 5 do
+		local ang = i * math.pi / 3
+		a.box("Frond", Vector3.new(7, 0.5, 2), Vector3.new(x + math.cos(ang) * 3.2, h + 0.5, z + math.sin(ang) * 3.2), Color3.fromRGB(40, 160, 70), PLASTIC, 0, -ang)
+	end
+end
+
+-- 1) PRE-HISTORIA: vulcao, lava, esqueleto de dinossauro, ninhos com ovos, samambaias
+do
+	local a = newArena("Pre-Historia", Vector3.new(-300, 0, 250), 17)
+	a.box("Floor", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -1, 0), Color3.fromRGB(125, 150, 70))
+	walls(a)
+	local tiers = { { 36, Color3.fromRGB(95, 85, 90) }, { 28, Color3.fromRGB(80, 72, 78) }, { 20, Color3.fromRGB(70, 62, 68) }, { 12, Color3.fromRGB(150, 70, 45) } }
+	for i, t in ipairs(tiers) do
+		a.box("Volcano" .. i, Vector3.new(t[1], 4, t[1]), Vector3.new(0, (i - 1) * 4 + 2, 0), t[2])
+	end
+	hazard(a.box("LavaTop", Vector3.new(6, 0.5, 6), Vector3.new(0, 16.25, 0), Color3.fromRGB(255, 110, 20)), " caiu no vulcao!")
+	for _, sx in ipairs({ -26, 26 }) do
+		for _, sz in ipairs({ -26, 26 }) do
+			hazard(a.box("Lava", Vector3.new(12, 0.6, 12), Vector3.new(sx, 0.3, sz), Color3.fromRGB(255, 100, 20)), " caiu na lava!")
+			deco(a.box("LavaGlow", Vector3.new(4, 5, 4), Vector3.new(sx, 3, sz), Color3.fromRGB(255, 170, 60), Enum.Material.Neon, 0.7))
+		end
+	end
+	for _, t in ipairs({ { -40, 0 }, { 40, 0 }, { 0, 40 }, { 0, -40 }, { -38, 38 }, { 38, -38 }, { -38, -14 }, { 38, 14 } }) do
+		tree(a, t[1], t[2], 10, Color3.fromRGB(46, 140, 60))
+	end
+	for _, b in ipairs({ { -10, -32 }, { 10, 32 }, { 32, -6 }, { -32, 6 } }) do
+		a.box("Boulder", Vector3.new(8, 6, 8), Vector3.new(b[1], 3, b[2]), Color3.fromRGB(130, 130, 135))
+		a.box("Boulder", Vector3.new(5, 4, 5), Vector3.new(b[1] + 3, 2, b[2] + 4), Color3.fromRGB(110, 110, 118))
+	end
+	-- esqueleto
+	for i = -2, 2 do
+		a.box("Rib", Vector3.new(0.8, 5, 0.8), Vector3.new(i * 3, 2.5, -27), BONE)
+		a.box("Rib", Vector3.new(0.8, 5, 0.8), Vector3.new(i * 3, 2.5, -21), BONE)
+		a.box("RibTop", Vector3.new(0.8, 0.8, 6.8), Vector3.new(i * 3, 5.2, -24), BONE)
+	end
+	a.box("Spine", Vector3.new(16, 0.9, 0.9), Vector3.new(0, 5.8, -24), BONE)
+	a.box("Skull", Vector3.new(4, 3, 5), Vector3.new(-11, 1.5, -24), BONE)
+	for i = -1, 1 do deco(a.box("Tooth", Vector3.new(0.4, 0.8, 0.4), Vector3.new(-13.2, 0.4, -24 + i * 1.4), Color3.new(1, 1, 1))) end
+	-- ninhos com ovos
+	for _, n in ipairs({ { -46, -46 }, { 46, -46 }, { -46, 46 }, { 46, 46 } }) do
+		for _, d in ipairs({ { 0, 3, 7, 1 }, { 0, -3, 7, 1 }, { 3, 0, 1, 7 }, { -3, 0, 1, 7 } }) do
+			a.box("Nest", Vector3.new(d[3], 1, d[4]), Vector3.new(n[1] + d[1], 0.5, n[2] + d[2]), Color3.fromRGB(150, 110, 60))
+		end
+		for k = -1, 1 do
+			a.box("Egg", Vector3.new(2, 3, 2), Vector3.new(n[1] + k * 1.8, 1.5, n[2]), Color3.fromHSV(0.1 + k * 0.05, 0.25, 1))
+		end
+	end
+	for i, f in ipairs({ { -20, 34 }, { 20, -34 }, { -34, -20 }, { 34, 22 }, { -22, -36 }, { 24, 36 }, { 12, -44 }, { -14, 46 } }) do
+		for k = 0, 2 do
+			deco(a.box("Fern", Vector3.new(4, 1.2, 1), Vector3.new(f[1], 0.6, f[2]), Color3.fromRGB(50, 170, 70), PLASTIC, 0, k * math.pi / 3))
+		end
+	end
+	for _, g in ipairs({ { -34, -2 }, { 34, 2 } }) do
+		deco(a.box("Steam", Vector3.new(3, 12, 3), Vector3.new(g[1], 6, g[2]), Color3.new(1, 1, 1), PLASTIC, 0.6))
+	end
+	for i = 0, 15 do
+		local ang = i / 16 * math.pi * 2
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(math.cos(ang) * 50, 4, math.sin(ang) * 50)
+	end
+end
+
+-- 2) LAGO: ilha, pedras, pontes, vitorias-regias, barco e penhascos com palmeiras
+do
+	local a = newArena("Lago", Vector3.new(0, 0, 300), 11)
+	a.box("Lakebed", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -6, 0), Color3.fromRGB(220, 200, 140))
+	walls(a)
+	hazard(a.box("Water", Vector3.new(SIZE, 4, SIZE), Vector3.new(0, -2.6, 0), Color3.fromRGB(60, 140, 230), PLASTIC, 0.35), " caiu no lago!")
+	a.box("Island", Vector3.new(40, 4, 40), Vector3.new(0, -2, 0), Color3.fromRGB(90, 175, 80))
+	local stones = {}
+	for i = 0, 5 do
+		local ang = math.rad(i * 60)
+		local pos = Vector3.new(math.cos(ang) * 38, 0, math.sin(ang) * 38)
+		stones[#stones + 1] = pos
+		a.box("Stone", Vector3.new(14, 4, 14), pos + Vector3.new(0, -2, 0), Color3.fromRGB(150, 150, 160))
+		a.box("Bridge", Vector3.new(18, 1, 6), Vector3.new(math.cos(ang) * 25, -0.5, math.sin(ang) * 25), Color3.fromRGB(170, 120, 70), PLASTIC, 0, -ang)
+		for _, s in ipairs({ -3.4, 3.4 }) do
+			local rx, rz = math.cos(ang + math.pi / 2) * s, math.sin(ang + math.pi / 2) * s
+			a.box("Rail", Vector3.new(18, 0.4, 0.4), Vector3.new(math.cos(ang) * 25 + rx, 1.2, math.sin(ang) * 25 + rz), Color3.fromRGB(120, 80, 45), PLASTIC, 0, -ang)
+		end
+		for k = -1, 1, 2 do
+			local ra = ang + 0.5 * k
+			deco(a.box("Reed", Vector3.new(0.5, 5, 0.5), Vector3.new(math.cos(ra) * 44, 2.5, math.sin(ra) * 44), Color3.fromRGB(110, 170, 60)))
+		end
+	end
+	for _, t in ipairs({ { -12, -12 }, { 12, -12 }, { -12, 12 }, { 12, 12 } }) do
+		tree(a, t[1], t[2], 6, Color3.fromRGB(56, 160, 60))
+	end
+	a.box("Fountain", Vector3.new(8, 1.2, 8), Vector3.new(0, 0.6, 0), Color3.fromRGB(150, 150, 160))
+	a.box("FountainWater", Vector3.new(6, 0.4, 6), Vector3.new(0, 1.3, 0), Color3.fromRGB(100, 190, 255), PLASTIC, 0.3)
+	-- vitorias-regias como plataformas extras
+	for i = 0, 5 do
+		local ang = math.rad(i * 60 + 30)
+		a.box("LilyPad", Vector3.new(4.5, 0.2, 4.5), Vector3.new(math.cos(ang) * 32, -0.4, math.sin(ang) * 32), Color3.fromRGB(70, 170, 70))
+		deco(a.box("Flower", Vector3.new(1, 0.8, 1), Vector3.new(math.cos(ang) * 32, 0.2, math.sin(ang) * 32), Color3.fromRGB(255, 150, 200)))
+	end
+	-- barco
+	local bx, bz = 22, 24
+	a.box("Hull", Vector3.new(9, 1.5, 3.6), Vector3.new(bx, 0.15, bz), Color3.fromRGB(150, 95, 50), PLASTIC, 0, -0.5)
+	a.box("Deck", Vector3.new(7, 0.3, 3), Vector3.new(bx, 1.0, bz), Color3.fromRGB(190, 140, 80), PLASTIC, 0, -0.5)
+	a.box("Mast", Vector3.new(0.5, 8, 0.5), Vector3.new(bx, 4.5, bz), Color3.fromRGB(110, 75, 40))
+	deco(a.box("Sail", Vector3.new(0.3, 5, 4), Vector3.new(bx, 5.5, bz), Color3.new(1, 1, 1), PLASTIC, 0, -0.5))
+	-- penhascos nos cantos
+	for _, c in ipairs({ { -52, -52 }, { 52, -52 }, { -52, 52 }, { 52, 52 } }) do
+		a.box("Cliff", Vector3.new(14, 10, 14), Vector3.new(c[1], 3, c[2]), Color3.fromRGB(130, 125, 120))
+		a.box("CliffTop", Vector3.new(10, 3, 10), Vector3.new(c[1], 9.5, c[2]), Color3.fromRGB(90, 170, 80))
+		palm(a, c[1], c[2], 8)
+	end
+	for _, off in ipairs({ Vector3.new(-3, 4, -3), Vector3.new(3, 4, 3), Vector3.new(-3, 4, 3), Vector3.new(3, 4, -3) }) do
+		for _, s in ipairs(stones) do a.Spawns[#a.Spawns + 1] = a.Center + s + off end
+	end
+end
+
+-- 3) CIDADE: ruas, predios com janelas, faixas, onibus, carros, postes, outdoor
+do
+	local a = newArena("Cidade", Vector3.new(300, 0, 250), 19)
+	a.box("Floor", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -1, 0), Color3.fromRGB(70, 72, 80))
+	walls(a)
+	deco(a.box("Line", Vector3.new(SIZE - 4, 0.2, 1), Vector3.new(0, 0.1, 0), Color3.fromRGB(255, 220, 60)))
+	deco(a.box("Line", Vector3.new(1, 0.2, SIZE - 4), Vector3.new(0, 0.1, 0), Color3.fromRGB(255, 220, 60)))
+	local wrng = Random.new(5)
+	local function windows(bx, bz, h)
+		for r = 1, math.max(1, math.floor((h - 2) / 6)) do
+			local y = (r - 1) * 6 + 4
+			for c = -1, 1 do
+				local lit = wrng:NextNumber() < 0.5
+				local col = lit and Color3.fromRGB(255, 235, 150) or Color3.fromRGB(150, 200, 235)
+				local mat = lit and Enum.Material.Neon or PLASTIC
+				for _, f in ipairs({ 12.15, -12.15 }) do
+					deco(a.box("Window", Vector3.new(3, 3, 0.3), Vector3.new(bx + c * 7, y, bz + f), col, mat))
+					deco(a.box("Window", Vector3.new(0.3, 3, 3), Vector3.new(bx + f, y, bz + c * 7), col, mat))
+				end
+			end
+		end
+	end
+	local blds = { { 24, 24, 6 }, { -24, -24, 6 }, { 24, -24, 30 }, { -24, 24, 24 } }
+	for i, b in ipairs(blds) do
+		a.box("Building", Vector3.new(24, b[3], 24), Vector3.new(b[1], b[3] / 2, b[2]), Color3.fromHSV(i / 4, 0.45, 0.95))
+		a.box("RoofEdge", Vector3.new(25, 0.8, 25), Vector3.new(b[1], b[3] + 0.4, b[2]), Color3.fromRGB(80, 80, 90))
+		a.box("AC", Vector3.new(4, 2, 4), Vector3.new(b[1] + 6, b[3] + 1.8, b[2] + 6), Color3.fromRGB(170, 175, 185))
+		a.box("Antenna", Vector3.new(0.4, 6, 0.4), Vector3.new(b[1] - 6, b[3] + 3.8, b[2] - 6), Color3.fromRGB(90, 90, 100))
+		windows(b[1], b[2], b[3])
+	end
+	local bb = a.box("Billboard", Vector3.new(16, 6, 1), Vector3.new(24, 35, -24), Color3.fromRGB(30, 30, 60))
+	sign(bb, "PASSA BOMBA CITY", 0, 420, 110)
+	for _, dx in ipairs({ -6, 6 }) do a.box("BillboardPost", Vector3.new(0.8, 5, 0.8), Vector3.new(24 + dx, 31.8, -24), Color3.fromRGB(90, 90, 100)) end
+	for _, c in ipairs({ { 0, 24, 5, 10, Color3.fromRGB(220, 60, 60) }, { 0, -24, 5, 10, Color3.fromRGB(60, 120, 220) }, { 24, 0, 10, 5, Color3.fromRGB(240, 200, 60) }, { -24, 0, 10, 5, Color3.fromRGB(80, 200, 120) } }) do
+		a.box("Car", Vector3.new(c[3], 2.2, c[4]), Vector3.new(c[1], 1.1, c[2]), c[5])
+		deco(a.box("CarTop", Vector3.new(c[3] - 1, 1.2, c[4] - 4), Vector3.new(c[1], 2.8, c[2]), Color3.fromRGB(170, 215, 245)))
+	end
+	for _, l in ipairs({ { -10, -10 }, { 10, -10 }, { -10, 10 }, { 10, 10 } }) do
+		a.box("Post", Vector3.new(1, 12, 1), Vector3.new(l[1], 6, l[2]), Color3.fromRGB(90, 90, 100))
+		a.box("Lamp", Vector3.new(3, 1, 3), Vector3.new(l[1], 12.5, l[2]), Color3.fromRGB(255, 240, 150), Enum.Material.Neon)
+	end
+	for _, v in ipairs({ 16, -16 }) do
+		for i = -4, 4 do
+			deco(a.box("Crosswalk", Vector3.new(1.2, 0.2, 5), Vector3.new(i * 2.2, 0.1, v), Color3.new(1, 1, 1)))
+			deco(a.box("Crosswalk", Vector3.new(5, 0.2, 1.2), Vector3.new(v, 0.1, i * 2.2), Color3.new(1, 1, 1)))
+		end
+	end
+	a.box("Fountain", Vector3.new(10, 1.5, 10), Vector3.new(0, 0.75, 0), Color3.fromRGB(150, 150, 165))
+	a.box("FountainWater", Vector3.new(8, 0.4, 8), Vector3.new(0, 1.6, 0), Color3.fromRGB(110, 200, 255), PLASTIC, 0.3)
+	a.box("FountainTop", Vector3.new(3, 6, 3), Vector3.new(0, 4, 0), Color3.fromRGB(220, 220, 230))
+	-- onibus
+	a.box("Bus", Vector3.new(16, 4, 6), Vector3.new(-10, 2.5, -44), Color3.fromRGB(250, 200, 40))
+	deco(a.box("BusWindows", Vector3.new(14, 1.4, 6.2), Vector3.new(-10, 3.4, -44), Color3.fromRGB(150, 200, 235)))
+	for _, wx in ipairs({ -14, -6 }) do
+		for _, wz in ipairs({ -47, -41 }) do deco(a.box("Wheel", Vector3.new(2, 2, 0.8), Vector3.new(wx, 1, wz), Color3.fromRGB(30, 30, 35))) end
+	end
+	-- floreiras nos cantos
+	for _, c in ipairs({ { -38, -38 }, { 38, -38 }, { -38, 38 }, { 38, 38 } }) do
+		a.box("Planter", Vector3.new(5, 1.5, 5), Vector3.new(c[1], 0.75, c[2]), Color3.fromRGB(150, 90, 60))
+		tree(a, c[1], c[2], 5, Color3.fromRGB(70, 175, 80))
+	end
+	for _, k in ipairs({ -40, -20, 0, 20, 40 }) do
+		for _, v in ipairs({ Vector3.new(k, 4, 48), Vector3.new(k, 4, -48), Vector3.new(48, 4, k), Vector3.new(-48, 4, k) }) do
+			a.Spawns[#a.Spawns + 1] = a.Center + v
+		end
+	end
+end
+
+-- 5) RESTAURANTE: salao com mesas, cozinha com fogao quente, chef e hamburguer gigante
+do
+	local a = newArena("Restaurante", Vector3.new(-300, 0, -300), 13)
+	for ix = 0, 11 do
+		for iz = 0, 11 do
+			a.box("Tile", Vector3.new(10, 2, 10), Vector3.new(-55 + ix * 10, -1, -55 + iz * 10), ((ix + iz) % 2 == 0) and Color3.fromRGB(245, 240, 230) or Color3.fromRGB(70, 70, 80))
+		end
+	end
+	for _, d in ipairs({ { 0, SIZE / 2 + 1, SIZE + 4, 2 }, { 0, -SIZE / 2 - 1, SIZE + 4, 2 }, { SIZE / 2 + 1, 0, 2, SIZE + 4 }, { -SIZE / 2 - 1, 0, 2, SIZE + 4 } }) do
+		a.box("Wall", Vector3.new(d[3], 32, d[4]), Vector3.new(d[1], 16, d[2]), Color3.fromRGB(255, 232, 190))
+		local bs = (d[3] > d[4]) and Vector3.new(d[3], 4, d[4] + 0.4) or Vector3.new(d[3] + 0.4, 4, d[4])
+		a.box("Band", bs, Vector3.new(d[1], 3, d[2]), Color3.fromRGB(190, 50, 45))
+	end
+	deco(a.box("Carpet", Vector3.new(12, 0.2, 80), Vector3.new(0, 0.1, 6), Color3.fromRGB(170, 30, 40)))
+	local function dine(x, z)
+		a.box("TableLeg", Vector3.new(1, 3.2, 1), Vector3.new(x, 1.6, z), Color3.fromRGB(90, 60, 40))
+		a.box("Table", Vector3.new(6, 0.6, 6), Vector3.new(x, 3.5, z), Color3.fromRGB(200, 55, 50))
+		deco(a.box("Plate", Vector3.new(1.8, 0.2, 1.8), Vector3.new(x, 3.9, z), Color3.new(1, 1, 1)))
+		deco(a.box("Candle", Vector3.new(0.4, 0.8, 0.4), Vector3.new(x + 1.6, 4.1, z + 1.6), Color3.fromRGB(255, 240, 150), Enum.Material.Neon))
+		for _, c in ipairs({ { -4.5, 0 }, { 4.5, 0 }, { 0, -4.5 }, { 0, 4.5 } }) do
+			a.box("Seat", Vector3.new(2.2, 1.6, 2.2), Vector3.new(x + c[1], 0.8, z + c[2]), Color3.fromRGB(150, 100, 60))
+			a.box("ChairBack", Vector3.new(c[1] ~= 0 and 0.5 or 2.2, 2.4, c[2] ~= 0 and 0.5 or 2.2), Vector3.new(x + c[1] * 1.25, 2.8, z + c[2] * 1.25), Color3.fromRGB(120, 80, 45))
+		end
+	end
+	for _, x in ipairs({ -36, -12, 12, 36 }) do
+		for _, z in ipairs({ -6, 20 }) do
+			if not (math.abs(x) < 20 and z == -6) then dine(x, z) end
+		end
+	end
+	-- cozinha
+	local STEEL = Color3.fromRGB(200, 205, 215)
+	a.box("Counter", Vector3.new(44, 4, 5), Vector3.new(0, 2, -42), STEEL)
+	a.box("CounterTop", Vector3.new(45, 0.5, 5.6), Vector3.new(0, 4.25, -42), Color3.fromRGB(235, 235, 240))
+	for _, x in ipairs({ -12, 12 }) do
+		a.box("Stove", Vector3.new(7, 0.5, 4), Vector3.new(x, 4.75, -42), Color3.fromRGB(50, 50, 55))
+		hazard(a.box("Burner", Vector3.new(2.4, 0.4, 2.4), Vector3.new(x, 5.15, -42), Color3.fromRGB(255, 110, 30), Enum.Material.Neon), " tocou no fogao quente!")
+	end
+	for i = -1, 1 do deco(a.box("Plate", Vector3.new(2, 0.2, 2), Vector3.new(i * 4, 4.6, -42), Color3.new(1, 1, 1))) end
+	a.box("Fridge", Vector3.new(6, 10, 5), Vector3.new(-46, 5, -56), STEEL)
+	a.box("Fridge", Vector3.new(6, 10, 5), Vector3.new(-39, 5, -56), STEEL)
+	a.box("PrepTable", Vector3.new(14, 3.5, 5), Vector3.new(30, 1.75, -54), STEEL)
+	a.box("Shelf", Vector3.new(18, 1, 3), Vector3.new(30, 8, -58.5), Color3.fromRGB(150, 100, 60))
+	for i = -3, 3 do deco(a.box("Pot", Vector3.new(1.6, 1.4, 1.6), Vector3.new(30 + i * 2.4, 9.2, -58.5), Color3.fromRGB(90, 90, 100))) end
+	-- hamburguer gigante na parede
+	local by = 14
+	a.box("BunBottom", Vector3.new(14, 2, 3), Vector3.new(0, by, -59), Color3.fromRGB(215, 150, 70))
+	a.box("Patty", Vector3.new(15, 2, 3.4), Vector3.new(0, by + 2, -59), Color3.fromRGB(95, 55, 30))
+	a.box("Lettuce", Vector3.new(16, 1, 3.6), Vector3.new(0, by + 3.5, -59), Color3.fromRGB(80, 200, 70))
+	a.box("Cheese", Vector3.new(15, 0.7, 3.4), Vector3.new(0, by + 4.4, -59), Color3.fromRGB(255, 205, 50))
+	a.box("BunTop", Vector3.new(14, 3, 3), Vector3.new(0, by + 6.3, -59), Color3.fromRGB(225, 160, 80))
+	for i = -3, 3 do deco(a.box("Seed", Vector3.new(0.8, 0.3, 0.8), Vector3.new(i * 1.8, by + 7.9, -59), Color3.fromRGB(250, 235, 200))) end
+	-- cardapio
+	local menu = a.box("Menu", Vector3.new(13, 8, 0.6), Vector3.new(-24, 9, -59.4), Color3.fromRGB(40, 55, 45))
+	local sg = Instance.new("SurfaceGui")
+	sg.Face, sg.CanvasSize, sg.Parent = Enum.NormalId.Back, Vector2.new(650, 400), menu
+	local mt = Instance.new("TextLabel")
+	mt.Size, mt.BackgroundTransparency, mt.TextScaled, mt.Font = UDim2.new(1, -20, 1, -20), 1, true, Enum.Font.FredokaOne
+	mt.Position, mt.TextColor3 = UDim2.new(0, 10, 0, 10), Color3.fromRGB(255, 245, 210)
+	mt.Text = "MENU\nHamburguer  " .. CFG.BurgerCoins .. " moedas\nVelocidade +35% por 8s\nFale com o Chef!"
+	mt.Parent = sg
+	-- chef
+	local chef, armGroup, rel = makeChef()
+	chef.Parent = a.Folder
+	local chefBase = CFrame.new(a.Center + Vector3.new(0, 4.3, -48)) * CFrame.Angles(0, math.pi, 0)
+	chef:PivotTo(chefBase)
+	chefNPC = chef
+	sign(chef.PrimaryPart, "Chef Pierre", 6, 260, 60)
+	chefAnimate = function(t)
+		local base = chefBase * CFrame.new(0, math.abs(math.sin(t * 2)) * 0.25, 0)
+		chef:PivotTo(base)
+		local sh = CFrame.new(2.1, 1.4, 0)
+		local rot = CFrame.Angles(math.sin(t * 4) * 0.9, 0, 0)
+		for _, p in ipairs(armGroup) do p.CFrame = base * sh * rot * sh:Inverse() * rel[p] end
+	end
+	-- decoracao
+	for _, c in ipairs({ { -55, -55 }, { 55, -55 }, { -55, 55 }, { 55, 55 } }) do
+		a.box("Pot", Vector3.new(2.4, 1.8, 2.4), Vector3.new(c[1], 0.9, c[2]), Color3.fromRGB(190, 100, 60))
+		deco(a.box("Plant", Vector3.new(4, 4, 4), Vector3.new(c[1], 3.8, c[2]), Color3.fromRGB(50, 160, 70)))
+	end
+	for _, l in ipairs({ { 0, 9 }, { -24, 9 }, { 24, 9 } }) do
+		a.box("LampPost", Vector3.new(0.6, 8, 0.6), Vector3.new(l[1], 4, l[2]), Color3.fromRGB(60, 50, 45))
+		deco(a.box("Shade", Vector3.new(2.6, 1.2, 2.6), Vector3.new(l[1], 8.4, l[2]), Color3.fromRGB(255, 225, 140), Enum.Material.Neon))
+	end
+	for i, k in ipairs({ -30, 0, 30 }) do
+		deco(a.box("Frame", Vector3.new(0.4, 5, 8), Vector3.new(59.7, 10, k), Color3.fromHSV(i / 3, 0.5, 1)))
+		deco(a.box("Frame", Vector3.new(0.4, 5, 8), Vector3.new(-59.7, 10, k), Color3.fromHSV(i / 3 + 0.15, 0.5, 1)))
+	end
+	for k = -50, 50, 10 do a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, 50) end
+	for _, z in ipairs({ -20, 0, 20, 35 }) do
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(-52, 4, z)
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(52, 4, z)
+	end
+end
+
+-- 6) BRASIL: morro com casinhas coloridas, campinho de futebol, bandeira, bar e pipas
+do
+	local a = newArena("Brasil", Vector3.new(300, 0, -300), 16)
+	a.box("Floor", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -1, 0), Color3.fromRGB(120, 175, 80))
+	walls(a)
+	local COLS = { Color3.fromRGB(240, 150, 60), Color3.fromRGB(80, 150, 220), Color3.fromRGB(250, 215, 70), Color3.fromRGB(90, 190, 110), Color3.fromRGB(240, 130, 170), Color3.fromRGB(205, 100, 70), Color3.fromRGB(150, 110, 200), Color3.fromRGB(235, 235, 225) }
+	local terr = { { -19, 18, 4, Color3.fromRGB(190, 165, 125) }, { -37, 18, 8, Color3.fromRGB(175, 150, 110) }, { -53, 14, 12, Color3.fromRGB(160, 135, 98) } }
+	for _, t in ipairs(terr) do
+		a.box("Terrace", Vector3.new(116, t[3], t[2]), Vector3.new(0, t[3] / 2, t[1]), t[4])
+	end
+	-- mural na frente do primeiro patamar
+	for i = 0, 7 do
+		deco(a.box("Mural", Vector3.new(12, 3, 0.4), Vector3.new(-49 + i * 14, 2, -9.8), COLS[i % 8 + 1]))
+	end
+	local hi = 0
+	local function house(x, topY, z, w, d, h)
+		hi = hi + 1
+		local col = COLS[hi % 8 + 1]
+		a.box("House", Vector3.new(w, h, d), Vector3.new(x, topY + h / 2, z), col)
+		if hi % 3 == 0 then a.box("Brick", Vector3.new(w + 0.1, 3, d + 0.1), Vector3.new(x, topY + 1.5, z), Color3.fromRGB(190, 95, 70)) end
+		a.box("Laje", Vector3.new(w + 1, 0.8, d + 1), Vector3.new(x, topY + h + 0.4, z), Color3.fromRGB(205, 205, 210))
+		deco(a.box("Door", Vector3.new(2.6, 5, 0.4), Vector3.new(x - 2, topY + 2.5, z + d / 2 + 0.1), Color3.fromRGB(95, 60, 40)))
+		for _, wx in ipairs({ 2.5, 4.5 }) do deco(a.box("Window", Vector3.new(1.8, 2.2, 0.4), Vector3.new(x + wx - 1, topY + 6, z + d / 2 + 0.1), Color3.fromRGB(160, 215, 245))) end
+		if hi % 2 == 0 then a.box("CaixaDagua", Vector3.new(3, 3, 3), Vector3.new(x + 3, topY + h + 2.3, z - 2), Color3.fromRGB(70, 130, 200)) end
+		if hi % 3 == 1 then a.box("Antenna", Vector3.new(0.4, 6, 0.4), Vector3.new(x - 3, topY + h + 3.8, z + 1), Color3.fromRGB(90, 90, 100)) end
+	end
+	for _, x in ipairs({ -45, -27, -9, 9, 27, 45 }) do house(x, 4, -19, 12, 11, 9) end
+	for _, x in ipairs({ -36, -18, 0, 18, 36 }) do house(x, 8, -37, 12, 11, 9) end
+	for _, x in ipairs({ -45, -27, -9, 9, 27, 45 }) do house(x, 12, -53, 12, 10, 9) end
+	-- campinho de futebol
+	local pz = 32
+	a.box("Pitch", Vector3.new(56, 0.4, 34), Vector3.new(0, 0.2, pz), Color3.fromRGB(60, 165, 70))
+	for _, l in ipairs({ { 56, 0.5, 0, pz - 17 }, { 56, 0.5, 0, pz + 17 } }) do deco(a.box("Line", Vector3.new(l[1], 0.1, l[2]), Vector3.new(l[3], 0.45, l[4]), Color3.new(1, 1, 1))) end
+	for _, x in ipairs({ -28, 0, 28 }) do deco(a.box("Line", Vector3.new(0.5, 0.1, 34), Vector3.new(x, 0.45, pz), Color3.new(1, 1, 1))) end
+	for _, s in ipairs({ -1, 1 }) do
+		for _, dz in ipairs({ -4.5, 4.5 }) do a.box("GoalPost", Vector3.new(0.6, 5, 0.6), Vector3.new(27.7 * s, 2.5, pz + dz), Color3.new(1, 1, 1)) end
+		a.box("Crossbar", Vector3.new(0.6, 0.6, 9.6), Vector3.new(27.7 * s, 5.2, pz), Color3.new(1, 1, 1))
+		deco(a.box("Net", Vector3.new(0.2, 5, 9.6), Vector3.new(29.5 * s, 2.5, pz), Color3.new(1, 1, 1), PLASTIC, 0.6))
+	end
+	deco(a.box("Ball", Vector3.new(1.6, 1.6, 1.6), Vector3.new(0, 1.2, pz), Color3.new(1, 1, 1)))
+	-- bandeira do Brasil
+	a.box("FlagPole", Vector3.new(0.6, 20, 0.6), Vector3.new(-50, 10, -7), Color3.fromRGB(200, 200, 205))
+	a.box("Flag", Vector3.new(14, 9, 0.5), Vector3.new(-43, 15.5, -7), Color3.fromRGB(0, 156, 59))
+	P(a.Folder, "Diamond", Vector3.new(6.2, 6.2, 0.6), CFrame.new(a.Center + Vector3.new(-43, 15.5, -7)) * CFrame.Angles(0, 0, math.rad(45)), Color3.fromRGB(254, 223, 0))
+	a.box("Globe", Vector3.new(3.2, 3.2, 0.8), Vector3.new(-43, 15.5, -7), Color3.fromRGB(0, 39, 118))
+	-- postes e fios
+	for _, x in ipairs({ -40, -14, 14, 40 }) do
+		a.box("Pole", Vector3.new(0.8, 18, 0.8), Vector3.new(x, 9, -7), Color3.fromRGB(110, 100, 90))
+		a.box("Arm", Vector3.new(5, 0.4, 0.4), Vector3.new(x, 16.5, -7), Color3.fromRGB(110, 100, 90))
+	end
+	for _, w in ipairs({ { -27, 26 }, { 0, 28 }, { 27, 26 } }) do
+		deco(a.box("Wire", Vector3.new(w[2], 0.15, 0.15), Vector3.new(w[1], 16.5, -7), Color3.fromRGB(30, 30, 30)))
+	end
+	for _, p in ipairs({ { -46, 18 }, { 46, 18 }, { -46, 46 }, { 46, 46 } }) do palm(a, p[1], p[2], 13) end
+	-- bar
+	a.box("BarCounter", Vector3.new(10, 3.5, 4), Vector3.new(46, 1.75, 6), Color3.fromRGB(150, 100, 60))
+	for i = 0, 3 do a.box("Awning", Vector3.new(2.6, 0.6, 7), Vector3.new(42.2 + i * 2.6, 9, 6), (i % 2 == 0) and Color3.fromRGB(0, 156, 59) or Color3.fromRGB(254, 223, 0)) end
+	for _, dx in ipairs({ -5, 5 }) do a.box("BarPost", Vector3.new(0.8, 9, 0.8), Vector3.new(46 + dx, 4.5, 3), Color3.fromRGB(110, 75, 40)) end
+	sign(a.box("BarSign", Vector3.new(9, 2.4, 0.6), Vector3.new(46, 11, 3), Color3.fromRGB(255, 244, 214)), "BAR DO ZE", 0, 300, 70)
+	-- pipas
+	for i, k in ipairs({ { -30, 26, 10 }, { 20, 30, -2 }, { 40, 22, 28 }, { -12, 28, 24 } }) do
+		deco(P(a.Folder, "Kite", Vector3.new(4, 4, 0.2), CFrame.new(a.Center + Vector3.new(k[1], k[2], k[3])) * CFrame.Angles(0, i, math.rad(45)), COLS[i * 2]))
+	end
+	for k = -50, 50, 10 do a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, 52) end
+	for _, z in ipairs({ 10, 30 }) do
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(-52, 4, z)
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(52, 4, z + 14)
+	end
+end
+
+-- 8) PRAIA DE COPACABANA: a agua NAO mata (so deixa mais lento). Guarda-sois, postos de guarda-vidas, calcadao
+do
+	local a = newArena("Praia de Copacabana", Vector3.new(600, 0, 0), 15)
+	beachArena = a
+	a.box("Sand", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -1, 0), Color3.fromRGB(238, 214, 150))
+	walls(a)
+
+	-- mar raso (nao e hazard) com ondas animadas
+	deco(a.box("Sea", Vector3.new(SIZE, 1.4, 40), Vector3.new(0, 0.7, -40), Color3.fromRGB(40, 150, 220), PLASTIC, 0.45))
+	deco(a.box("WetSand", Vector3.new(SIZE, 0.1, 4), Vector3.new(0, 0.06, -18), Color3.fromRGB(196, 165, 110)))
+	local foam = {}
+	for i = 1, 3 do
+		foam[i] = deco(a.box("Foam", Vector3.new(SIZE - 6, 0.2, 1.6), Vector3.new(0, 1.45, -24 - (i - 1) * 10), Color3.new(1, 1, 1), PLASTIC, 0.2))
+	end
+	RunS.Heartbeat:Connect(function()
+		if currentArena ~= a then return end
+		local t = os.clock()
+		for i, f in ipairs(foam) do
+			f.CFrame = CFrame.new(a.Center.X, 1.45, a.Center.Z - 24 - (i - 1) * 10 + math.sin(t * 1.4 + i * 1.7) * 2.2)
+		end
+	end)
+	for x = -50, 50, 10 do deco(a.box("Buoy", Vector3.new(1.4, 1.4, 1.4), Vector3.new(x, 1.5, -56), Color3.fromRGB(255, 80, 60))) end
+	deco(a.box("BuoyRope", Vector3.new(104, 0.12, 0.12), Vector3.new(0, 1.7, -56), Color3.new(1, 1, 1)))
+	for _, sx in ipairs({ -52, 52 }) do
+		a.box("Rock", Vector3.new(14, 9, 14), Vector3.new(sx, 4.5, -38), Color3.fromRGB(120, 118, 112))
+		a.box("Rock", Vector3.new(9, 7, 9), Vector3.new(sx, 12, -38), Color3.fromRGB(105, 110, 100))
+		a.box("RockGreen", Vector3.new(6, 2, 6), Vector3.new(sx, 16.5, -38), Color3.fromRGB(70, 150, 70))
+	end
+	-- jet ski na agua rasa
+	a.box("JetSki", Vector3.new(5, 1.2, 2), Vector3.new(36, 0.9, -30), Color3.fromRGB(250, 205, 40), PLASTIC, 0, 0.4)
+	a.box("JetSkiSeat", Vector3.new(2, 0.6, 1.2), Vector3.new(36, 1.8, -30), Color3.fromRGB(30, 30, 35), PLASTIC, 0, 0.4)
+
+	-- calcadao de Copacabana (ondas preto e branco)
+	for r = 0, 3 do
+		for ix = -10, 9 do
+			local wz = 23.5 + r * 3 + math.sin(ix * 0.6 + r) * 0.8
+			a.box("Calcadao", Vector3.new(6, 0.3, 3), Vector3.new(ix * 6 + 3, 0.15 + r * 0.01, wz), ((ix + r) % 2 == 0) and Color3.new(1, 1, 1) or Color3.fromRGB(30, 30, 35))
+		end
+	end
+	a.box("Sidewalk", Vector3.new(SIZE, 0.3, 4), Vector3.new(0, 0.15, 36), Color3.fromRGB(215, 205, 190))
+	a.box("Road", Vector3.new(SIZE, 0.2, 10), Vector3.new(0, 0.1, 43), Color3.fromRGB(60, 62, 70))
+	for x = -54, 54, 12 do deco(a.box("RoadLine", Vector3.new(6, 0.1, 0.5), Vector3.new(x, 0.25, 43), Color3.new(1, 1, 1))) end
+	for _, c in ipairs({ { -20, 45, Color3.fromRGB(240, 200, 40) }, { 24, 41, Color3.fromRGB(220, 60, 60) }, { -42, 41, Color3.fromRGB(70, 130, 220) } }) do
+		a.box("Car", Vector3.new(9, 2.2, 4), Vector3.new(c[1], 1.3, c[2]), c[3])
+		deco(a.box("CarTop", Vector3.new(5, 1.2, 3.6), Vector3.new(c[1], 3, c[2]), Color3.fromRGB(170, 215, 245)))
+	end
+	for x = -54, 54, 18 do
+		palm(a, x, 35, 13)
+		a.box("StreetLamp", Vector3.new(0.5, 9, 0.5), Vector3.new(x + 9, 4.5, 36.5), Color3.fromRGB(90, 90, 100))
+		deco(a.box("LampTop", Vector3.new(1.6, 0.8, 1.6), Vector3.new(x + 9, 9.4, 36.5), Color3.fromRGB(255, 240, 150), Enum.Material.Neon))
+	end
+
+	-- predios da Avenida Atlantica (e o Copacabana Palace no meio)
+	local brng = Random.new(21)
+	local function hotel(x, w, h, col, name)
+		a.box("Hotel", Vector3.new(w, h, 10), Vector3.new(x, h / 2, 55), col)
+		a.box("HotelRoof", Vector3.new(w + 1, 1, 11), Vector3.new(x, h + 0.5, 55), Color3.fromRGB(200, 200, 205))
+		for r = 1, math.floor((h - 4) / 6) do
+			for c = 0, math.max(1, math.floor(w / 5)) - 1 do
+				local lit = brng:NextNumber() < 0.4
+				local wx = x - w / 2 + 2.5 + c * 5
+				deco(a.box("Window", Vector3.new(2.6, 3, 0.3), Vector3.new(wx, r * 6, 49.85), lit and Color3.fromRGB(255, 235, 150) or Color3.fromRGB(150, 200, 235), lit and Enum.Material.Neon or PLASTIC))
+				deco(a.box("Balcony", Vector3.new(3.4, 0.4, 1.4), Vector3.new(wx, r * 6 - 1.6, 49.4), Color3.fromRGB(235, 235, 235)))
+			end
+		end
+		if name then sign(a.box("HotelSign", Vector3.new(w - 4, 3, 0.6), Vector3.new(x, h - 3, 49.6), Color3.fromRGB(150, 25, 40)), name, 0, 420, 90) end
+	end
+	hotel(-56, 8, 22, Color3.fromRGB(235, 200, 170), nil)
+	hotel(-42, 18, 34, Color3.fromRGB(245, 235, 215), nil)
+	hotel(-24, 18, 26, Color3.fromRGB(215, 230, 240), nil)
+	hotel(0, 30, 30, Color3.fromRGB(250, 245, 235), "COPACABANA PALACE")
+	hotel(24, 18, 38, Color3.fromRGB(240, 215, 200), nil)
+	hotel(42, 18, 28, Color3.fromRGB(225, 235, 215), nil)
+	hotel(56, 8, 24, Color3.fromRGB(245, 225, 190), nil)
+
+	-- postos de guarda-vidas
+	local function posto(x, z, label)
+		for _, dx in ipairs({ -2, 2 }) do
+			for _, dz in ipairs({ -2, 2 }) do a.box("PostoLeg", Vector3.new(0.7, 6, 0.7), Vector3.new(x + dx, 3, z + dz), Color3.fromRGB(240, 240, 240)) end
+		end
+		a.box("PostoDeck", Vector3.new(6, 0.6, 6), Vector3.new(x, 6.3, z), Color3.new(1, 1, 1))
+		a.box("PostoCabin", Vector3.new(5, 4, 5), Vector3.new(x, 8.6, z), Color3.new(1, 1, 1))
+		a.box("PostoStripe", Vector3.new(5.2, 1, 5.2), Vector3.new(x, 7.6, z), Color3.fromRGB(225, 40, 40))
+		deco(a.box("PostoWindow", Vector3.new(3.5, 1.8, 0.3), Vector3.new(x, 9.2, z - 2.55), Color3.fromRGB(150, 210, 245)))
+		local roof = a.box("PostoRoof", Vector3.new(7, 0.6, 7), Vector3.new(x, 10.9, z), Color3.fromRGB(225, 40, 40))
+		sign(roof, label, 3, 220, 50)
+		for i = 1, 5 do
+			a.box("PostoStep", Vector3.new(3.2, 0.6, 1.4), Vector3.new(x, i * 1.15 - 0.3, z + 3 + 0.7 + (5 - i) * 1.4), Color3.fromRGB(235, 235, 235))
+		end
+		deco(a.box("Buoy", Vector3.new(4, 0.9, 1.2), Vector3.new(x + 5, 0.5, z - 1), Color3.fromRGB(235, 50, 40)))
+		a.box("FlagPole", Vector3.new(0.3, 8, 0.3), Vector3.new(x - 5, 4, z + 3), Color3.fromRGB(220, 220, 225))
+		deco(a.box("Flag", Vector3.new(2.6, 1.6, 0.2), Vector3.new(x - 6.4, 7.2, z + 3), Color3.fromRGB(225, 40, 40)))
+	end
+	posto(-28, -3, "POSTO 5 - GUARDA-VIDAS")
+	posto(28, 3, "POSTO 6 - GUARDA-VIDAS")
+	for _, fx in ipairs({ -15, 15 }) do
+		a.box("FlagPole", Vector3.new(0.3, 7, 0.3), Vector3.new(fx, 3.5, -17), Color3.fromRGB(220, 220, 225))
+		deco(a.box("Flag", Vector3.new(2.4, 1.5, 0.2), Vector3.new(fx + 1.3, 6.2, -17), (fx < 0) and Color3.fromRGB(250, 205, 40) or Color3.fromRGB(225, 40, 40)))
+	end
+
+	-- guarda-sois e cadeiras
+	local PAL = { Color3.fromRGB(230, 50, 50), Color3.fromRGB(50, 110, 220), Color3.fromRGB(250, 200, 50), Color3.fromRGB(40, 170, 90), Color3.fromRGB(240, 130, 40) }
+	local function sol(x, z, c1)
+		a.box("UmbrellaPole", Vector3.new(0.3, 6, 0.3), Vector3.new(x, 3, z), Color3.fromRGB(200, 200, 205))
+		a.box("Umbrella", Vector3.new(7, 0.5, 7), Vector3.new(x, 6.2, z), c1)
+		a.box("Umbrella", Vector3.new(4.6, 0.5, 4.6), Vector3.new(x, 6.7, z), Color3.new(1, 1, 1))
+		a.box("Umbrella", Vector3.new(2, 0.5, 2), Vector3.new(x, 7.15, z), c1)
+		deco(a.box("Towel", Vector3.new(3, 0.1, 6), Vector3.new(x + 2.5, 0.06, z + 1), c1))
+		a.box("ChairSeat", Vector3.new(2, 0.5, 2.4), Vector3.new(x - 2.5, 1.2, z + 1), Color3.fromRGB(240, 240, 240))
+		a.box("ChairBack", Vector3.new(2, 2.2, 0.4), Vector3.new(x - 2.5, 2.2, z + 2.4), Color3.fromRGB(240, 240, 240))
+	end
+	for i, p in ipairs({ { -45, -8 }, { -38, 6 }, { -15, -10 }, { -8, 6 }, { 12, -9 }, { 20, 8 }, { 40, -6 }, { 46, 8 }, { -20, 8 }, { 34, -12 } }) do
+		sol(p[1], p[2], PAL[(i - 1) % 5 + 1])
+	end
+
+	-- quadra de futevolei
+	for _, z in ipairs({ -12.5, -3.5 }) do deco(a.box("CourtLine", Vector3.new(18, 0.1, 0.4), Vector3.new(0, 0.08, z), Color3.new(1, 1, 1))) end
+	for _, x in ipairs({ -9, 9 }) do
+		deco(a.box("CourtLine", Vector3.new(0.4, 0.1, 9), Vector3.new(x, 0.08, -8), Color3.new(1, 1, 1)))
+		a.box("NetPost", Vector3.new(0.5, 6.4, 0.5), Vector3.new(x, 3.2, -8), Color3.fromRGB(220, 220, 225))
+	end
+	deco(a.box("Net", Vector3.new(18, 2.2, 0.15), Vector3.new(0, 5.2, -8), Color3.new(1, 1, 1), PLASTIC, 0.4))
+	deco(a.box("NetTop", Vector3.new(18, 0.3, 0.25), Vector3.new(0, 6.4, -8), Color3.new(1, 1, 1)))
+	a.box("Ball", Vector3.new(1.2, 1.2, 1.2), Vector3.new(3, 0.6, -6), Color3.fromRGB(250, 250, 250))
+
+	-- pranchas de surf espetadas na areia
+	for i, p in ipairs({ { -22, -16 }, { -20, -16 }, { 22, -16 }, { 24.5, -16 } }) do
+		a.box("Surfboard", Vector3.new(1.4, 6, 0.3), Vector3.new(p[1], 3, p[2]), PAL[i + 1], PLASTIC, 0, 0.3 * i)
+	end
+
+	-- castelo de areia
+	local sc = Color3.fromRGB(225, 195, 130)
+	a.box("Castle", Vector3.new(8, 2, 8), Vector3.new(0, 1, 10), sc)
+	for _, c in ipairs({ { -3, -3 }, { 3, -3 }, { -3, 3 }, { 3, 3 } }) do a.box("Tower", Vector3.new(2.4, 5, 2.4), Vector3.new(c[1], 2.5, 10 + c[2]), sc) end
+	a.box("Keep", Vector3.new(4, 3.5, 4), Vector3.new(0, 3.75, 10), sc)
+	deco(a.box("CastleFlag", Vector3.new(1.4, 0.9, 0.15), Vector3.new(0.9, 6.2, 10), Color3.fromRGB(0, 156, 59)))
+
+	-- quiosque do coco
+	a.box("KioskCounter", Vector3.new(9, 3.5, 3), Vector3.new(-50, 1.75, 11), Color3.fromRGB(150, 100, 60))
+	for _, dx in ipairs({ -4.5, 4.5 }) do a.box("KioskPost", Vector3.new(0.8, 9, 0.8), Vector3.new(-50 + dx, 4.5, 8.5), Color3.fromRGB(110, 75, 40)) end
+	for i = 0, 3 do a.box("KioskRoof", Vector3.new(2.7, 0.6, 7), Vector3.new(-54 + i * 2.7 + 1.35, 9.3, 10), (i % 2 == 0) and Color3.fromRGB(0, 156, 59) or Color3.fromRGB(254, 223, 0)) end
+	sign(a.box("KioskSign", Vector3.new(8, 2.2, 0.5), Vector3.new(-50, 7.6, 8.4), Color3.fromRGB(255, 244, 214)), "QUIOSQUE DO COCO", 0, 300, 70)
+	for i = -1, 1 do deco(a.box("Coconut", Vector3.new(1.2, 1.2, 1.2), Vector3.new(-50 + i * 2.2, 4.1, 11), Color3.fromRGB(70, 170, 70))) end
+
+	for x = -50, 50, 10 do a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(x, 4, 16) end
+	for x = -45, 45, 15 do a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(x, 4, -14) end
+end
+
+-- 9) PARQUE DE DIVERSOES: entrada, roda-gigante FUNCIONAL (motor + cabines na vertical), barracas, bancos, postes, cercas
+do
+	local a = newArena("Parque de Diversoes", Vector3.new(600, 0, 300), 17.6)
+	parkArena = a
+	local snowGround, snowCaps, centerDecor = {}, {}, {}
+	a.SnowGround, a.SnowCaps, a.CenterDecor = snowGround, snowCaps, centerDecor
+	local function ground(p) snowGround[#snowGround + 1] = p return p end
+	local function cap(p) snowCaps[#snowCaps + 1] = p return p end
+	local function capAt(cf, size) snowCaps[#snowCaps + 1] = { CF = cf, Size = size } end
+	local function center(p) centerDecor[#centerDecor + 1] = p return p end
+	local function bulb(p) p.CanCollide, p.CanTouch, p.CanQuery = false, false, false CS:AddTag(p, "PBBulb") return p end
+
+	-- gramado listrado (12 faixas) + muros
+	for i = 0, 11 do
+		ground(a.box("Grass", Vector3.new(10, 2, SIZE), Vector3.new(-55 + i * 10, -1, 0), (i % 2 == 0) and Color3.fromRGB(96, 190, 72) or Color3.fromRGB(84, 174, 62)))
+	end
+	walls(a)
+
+	-- caminhos coloridos
+	local th = 0
+	local function tile(x, z, s)
+		th = th + 1
+		ground(a.box("Tile", Vector3.new(s, 0.3, s), Vector3.new(x, 0.15, z), Color3.fromHSV((th * 0.137) % 1, 0.45, 1)))
+	end
+	for r = 0, 5 do
+		for c = 0, 1 do
+			tile(-3 + c * 6, 17 + r * 6, 6)
+			tile(-3 + c * 6, -17 - r * 6, 6)
+		end
+	end
+	for i = 0, 3 do for j = 0, 3 do tile(-10.5 + i * 7, -10.5 + j * 7, 7) end end
+	for i = 0, 5 do
+		for _, sx in ipairs({ -1, 1 }) do
+			for _, zz in ipairs({ -3, 3 }) do tile(sx * (17 + i * 6), zz, 6) end
+		end
+	end
+
+	-- entrada grande
+	for _, x in ipairs({ -15, 15 }) do
+		a.box("GateTower", Vector3.new(7, 18, 7), Vector3.new(x, 9, 57), Color3.fromRGB(235, 70, 70))
+		for k = 0, 2 do
+			a.box("GateStripe", Vector3.new(7.4, 2, 7.4), Vector3.new(x, 4 + k * 5, 57), (k % 2 == 0) and Color3.new(1, 1, 1) or Color3.fromRGB(250, 205, 50))
+		end
+		cap(a.box("GateTop", Vector3.new(9, 1.2, 9), Vector3.new(x, 18.6, 57), Color3.fromRGB(80, 120, 230)))
+		a.box("GateSpire", Vector3.new(2, 5, 2), Vector3.new(x, 22, 57), Color3.fromRGB(250, 205, 50))
+		bulb(a.box("GateLight", Vector3.new(1.4, 1.4, 1.4), Vector3.new(x, 25.2, 57), Color3.fromRGB(255, 240, 120), Enum.Material.Neon))
+	end
+	cap(a.box("GateBeam", Vector3.new(34, 3, 5), Vector3.new(0, 19, 57), Color3.fromRGB(250, 205, 50)))
+	local gs = a.box("GateSign", Vector3.new(30, 7, 1.2), Vector3.new(0, 25, 57), Color3.fromRGB(235, 70, 70))
+	plaque(gs, "PARQUE DE DIVERSÕES", { Enum.NormalId.Front, Enum.NormalId.Back }, 1000, 230)
+	capAt(gs.CFrame * CFrame.new(0, 3.75, 0), Vector3.new(30.2, 0.5, 1.4))
+	for i = -6, 6 do
+		deco(a.box("Bunting", Vector3.new(1.4, 1.6, 0.2), Vector3.new(i * 2.4, 16.8, 54.3), Color3.fromHSV(((i + 6) * 0.11) % 1, 0.8, 1)))
+	end
+	for _, x in ipairs({ -6, -2, 2, 6 }) do
+		a.box("TurnstilePost", Vector3.new(0.8, 4, 0.8), Vector3.new(x, 2, 53), Color3.fromRGB(60, 60, 80))
+		deco(a.box("TurnstileBar", Vector3.new(2.6, 0.3, 0.3), Vector3.new(x, 3.4, 53), Color3.fromRGB(250, 205, 50)))
+	end
+	for _, x in ipairs({ -24, 24 }) do
+		a.box("TicketBooth", Vector3.new(6, 5, 5), Vector3.new(x, 2.5, 52), Color3.fromRGB(80, 150, 230))
+		deco(a.box("BoothWindow", Vector3.new(3.6, 2, 0.3), Vector3.new(x, 3, 49.4), Color3.fromRGB(180, 225, 250)))
+		cap(a.box("BoothRoof", Vector3.new(7.4, 0.8, 6.4), Vector3.new(x, 5.4, 52), Color3.fromRGB(235, 70, 70)))
+		sign(a.box("BoothSign", Vector3.new(4, 1.2, 0.3), Vector3.new(x, 6.6, 49.4), Color3.fromRGB(255, 244, 214)), "BILHETES", 0, 200, 50)
+	end
+
+	-- fonte central (sai no Natal para dar lugar a arvore gigante)
+	center(a.box("FountainBasin", Vector3.new(12, 1.2, 12), Vector3.new(0, 0.6, 0), Color3.fromRGB(160, 165, 180)))
+	center(deco(a.box("FountainWater", Vector3.new(10, 0.4, 10), Vector3.new(0, 1.3, 0), Color3.fromRGB(90, 190, 255), PLASTIC, 0.3)))
+	center(a.box("FountainColumn", Vector3.new(3, 5, 3), Vector3.new(0, 3.5, 0), Color3.fromRGB(235, 235, 245)))
+	center(a.box("FountainTop", Vector3.new(5, 0.8, 5), Vector3.new(0, 6.4, 0), Color3.fromRGB(250, 205, 50)))
+
+	-- bancos
+	local function bench(x, z, yaw)
+		local base = CFrame.new(a.Center + Vector3.new(x, 0, z)) * CFrame.Angles(0, yaw, 0)
+		local function bp(nm, sz, off, col) return P(a.Folder, nm, sz, base * CFrame.new(off), col) end
+		cap(bp("BenchSeat", Vector3.new(4.4, 0.5, 1.6), Vector3.new(0, 1.4, 0), Color3.fromRGB(190, 120, 60)))
+		bp("BenchBack", Vector3.new(4.4, 1.4, 0.4), Vector3.new(0, 2.5, -0.7), Color3.fromRGB(170, 105, 50))
+		for _, dx in ipairs({ -1.8, 1.8 }) do bp("BenchLeg", Vector3.new(0.4, 1.2, 1.4), Vector3.new(dx, 0.6, 0), Color3.fromRGB(60, 60, 70)) end
+	end
+	for _, b in ipairs({ { 0, 12.5, math.pi }, { 0, -12.5, 0 }, { 12.5, 0, -math.pi / 2 }, { -12.5, 0, math.pi / 2 },
+		{ 9, 24, -math.pi / 2 }, { 9, 36, -math.pi / 2 }, { -9, 24, math.pi / 2 }, { -9, 36, math.pi / 2 },
+		{ 9, -24, -math.pi / 2 }, { 9, -36, -math.pi / 2 }, { -9, -24, math.pi / 2 }, { -9, -36, math.pi / 2 },
+		{ 26, 8, math.pi }, { 26, -8, 0 }, { 40, 8, math.pi }, { 40, -8, 0 } }) do
+		bench(b[1], b[2], b[3])
+	end
+
+	-- postes de luz (so alguns com luz de verdade para rodar bem no celular)
+	local function lamp(x, z, lit)
+		a.box("LampBase", Vector3.new(1.6, 1, 1.6), Vector3.new(x, 0.5, z), Color3.fromRGB(60, 60, 80))
+		a.box("LampPole", Vector3.new(0.7, 11, 0.7), Vector3.new(x, 5.5, z), Color3.fromRGB(60, 60, 80))
+		local head = bulb(a.box("LampHead", Vector3.new(2, 1, 2), Vector3.new(x, 11.5, z), Color3.fromRGB(255, 235, 150), Enum.Material.Neon))
+		CS:RemoveTag(head, "PBBulb")
+		if lit then
+			local l = Instance.new("PointLight")
+			l.Range, l.Brightness, l.Color, l.Shadows = 22, 1.2, Color3.fromRGB(255, 220, 150), false
+			l.Parent = head
+		end
+	end
+	for _, z in ipairs({ 44, 32, 20, -20, -32, -44 }) do
+		lamp(-8, z, z == 44)
+		lamp(8, z, z == 44)
+	end
+	for _, c in ipairs({ { -15.5, -15.5 }, { 15.5, -15.5 }, { -15.5, 15.5 }, { 15.5, 15.5 } }) do lamp(c[1], c[2], true) end
+
+	-- cercas baixas
+	local function fence(x0, z0, x1, z1)
+		local dx, dz = x1 - x0, z1 - z0
+		local len = math.sqrt(dx * dx + dz * dz)
+		local yaw = math.atan2(dx, dz)
+		for _, y in ipairs({ 0.8, 1.4 }) do
+			a.box("FenceRail", Vector3.new(0.3, 0.3, len), Vector3.new((x0 + x1) / 2, y, (z0 + z1) / 2), Color3.new(1, 1, 1), PLASTIC, 0, yaw)
+		end
+		local n = math.max(1, math.floor(len / 4))
+		for i = 0, n do
+			a.box("FencePost", Vector3.new(0.5, 1.8, 0.5), Vector3.new(x0 + dx * i / n, 0.9, z0 + dz * i / n), Color3.fromRGB(250, 205, 50))
+		end
+	end
+	for _, f in ipairs({ { 17, 58, 55, 58 }, { -17, 58, -55, 58 }, { 24, -18, 56, -18 }, { 24, -18, 24, -50 } }) do fence(f[1], f[2], f[3], f[4]) end
+
+	-- canteiros de flores
+	local function flowerbed(x, z)
+		cap(a.box("BedBase", Vector3.new(6, 1, 4), Vector3.new(x, 0.5, z), Color3.fromRGB(120, 80, 45)))
+		for i = -2, 2 do
+			deco(a.box("Flower", Vector3.new(0.9, 0.9, 0.9), Vector3.new(x + i * 1.1, 1.4, z + ((i % 2 == 0) and 0.8 or -0.8)), Color3.fromHSV(((i + 3) * 0.17) % 1, 0.7, 1)))
+		end
+		fence(x - 3.6, z - 2.6, x + 3.6, z - 2.6)
+		fence(x - 3.6, z + 2.6, x + 3.6, z + 2.6)
+	end
+	for _, b in ipairs({ { 12, 30 }, { -12, 30 }, { 12, -30 }, { -12, -30 } }) do flowerbed(b[1], b[2]) end
+
+	-- barracas de comida e jogos
+	local function stand(x, z, yaw, name, c1, c2, props)
+		local base = CFrame.new(a.Center + Vector3.new(x, 0, z)) * CFrame.Angles(0, yaw, 0)
+		local function sp(nm, sz, off, col, mat) return P(a.Folder, nm, sz, base * CFrame.new(off), col, mat) end
+		sp("Counter", Vector3.new(9, 3.5, 3), Vector3.new(0, 1.75, 0), Color3.fromRGB(150, 100, 60))
+		sp("CounterTop", Vector3.new(9.6, 0.5, 3.6), Vector3.new(0, 3.75, 0.2), c2)
+		sp("BackWall", Vector3.new(9, 7.5, 0.6), Vector3.new(0, 3.75, -1.6), c1)
+		for _, dx in ipairs({ -4.4, 4.4 }) do sp("Post", Vector3.new(0.7, 8, 0.7), Vector3.new(dx, 4, 1.5), Color3.fromRGB(110, 75, 40)) end
+		sp("AwningBase", Vector3.new(9.8, 0.4, 6), Vector3.new(0, 8.2, 0), c1)
+		for i = 0, 4 do sp("AwningStripe", Vector3.new(1.96, 0.3, 6), Vector3.new(-3.92 + i * 1.96, 8.55, 0), (i % 2 == 0) and c2 or Color3.new(1, 1, 1)) end
+		capAt(base * CFrame.new(0, 8.95, 0), Vector3.new(10, 0.5, 6.2))
+		local board = sp("StandSign", Vector3.new(8, 2.2, 0.5), Vector3.new(0, 10, -1.2), Color3.fromRGB(60, 40, 30))
+		plaque(board, name, { Enum.NormalId.Back, Enum.NormalId.Front }, 700, 200)
+		props(sp)
+	end
+	local YEL, GRN, BRN, RED, WHT = Color3.fromRGB(245, 200, 70), Color3.fromRGB(80, 190, 70), Color3.fromRGB(120, 70, 40), Color3.fromRGB(225, 50, 40), Color3.new(1, 1, 1)
+	stand(22, 38, -math.pi / 2, "TACOS", Color3.fromRGB(240, 140, 40), Color3.fromRGB(250, 210, 60), function(sp)
+		for i = -1, 1 do
+			sp("Taco", Vector3.new(1.8, 0.9, 1.2), Vector3.new(i * 2.6, 4.5, 0.3), YEL)
+			sp("TacoTop", Vector3.new(1.7, 0.3, 1.0), Vector3.new(i * 2.6, 5.1, 0.3), GRN)
+		end
+	end)
+	stand(22, 22, -math.pi / 2, "HAMBURGUERES", RED, WHT, function(sp)
+		for _, x in ipairs({ -2, 2 }) do
+			sp("BunB", Vector3.new(1.6, 0.4, 1.6), Vector3.new(x, 4.2, 0.3), Color3.fromRGB(215, 150, 70))
+			sp("Patty", Vector3.new(1.7, 0.35, 1.7), Vector3.new(x, 4.58, 0.3), BRN)
+			sp("Lettuce", Vector3.new(1.8, 0.2, 1.8), Vector3.new(x, 4.85, 0.3), GRN)
+			sp("BunT", Vector3.new(1.6, 0.7, 1.6), Vector3.new(x, 5.3, 0.3), Color3.fromRGB(225, 160, 80))
+		end
+	end)
+	stand(-22, 38, math.pi / 2, "SORVETE", Color3.fromRGB(240, 130, 180), WHT, function(sp)
+		for i = -1, 1 do
+			sp("Cone", Vector3.new(0.9, 1.4, 0.9), Vector3.new(i * 2.6, 4.7, 0.3), Color3.fromRGB(215, 170, 100))
+			sp("Scoop", Vector3.new(1.2, 1.1, 1.2), Vector3.new(i * 2.6, 5.9, 0.3), Color3.fromHSV((i + 2) * 0.2, 0.4, 1))
+		end
+	end)
+	stand(-22, 22, math.pi / 2, "PIPOCA", Color3.fromRGB(250, 200, 40), RED, function(sp)
+		for i = -1, 1 do
+			sp("Bucket", Vector3.new(1.4, 1.8, 1.4), Vector3.new(i * 2.6, 4.9, 0.3), (i % 2 == 0) and RED or WHT)
+			sp("Popcorn", Vector3.new(1.6, 0.8, 1.6), Vector3.new(i * 2.6, 6.2, 0.3), Color3.fromRGB(255, 245, 200))
+		end
+	end)
+	stand(44, 6, -math.pi / 2, "JOGOS", Color3.fromRGB(130, 90, 220), Color3.fromRGB(80, 170, 240), function(sp)
+		for i = -2, 2 do sp("Plush", Vector3.new(1.4, 1.4, 1.4), Vector3.new(i * 1.8, 5.5, -1.0), Color3.fromHSV((i + 3) * 0.15, 0.6, 1)) end
+	end)
+
+	-- arvores, sebes, baloes
+	for i, t in ipairs({ { -54, -50 }, { -54, -30 }, { -54, 30 }, { -54, 50 }, { 54, -50 }, { 54, -30 }, { 54, 30 }, { 54, 50 }, { -30, -56 }, { 30, -56 }, { 0, -57 }, { 54, 10 } }) do
+		cap(tree(a, t[1], t[2], 8, Color3.fromRGB(46, 150, 60)))
+	end
+	for _, x in ipairs({ -30, 30 }) do cap(a.box("Hedge", Vector3.new(14, 3, 2.4), Vector3.new(x, 1.5, 52), Color3.fromRGB(40, 140, 55))) end
+	for _, c in ipairs({ { -10, 52 }, { 10, 52 }, { 18, -18 }, { -18, -18 } }) do
+		deco(a.box("BalloonString", Vector3.new(0.1, 8, 0.1), Vector3.new(c[1], 4, c[2]), Color3.new(1, 1, 1)))
+		for k = 0, 4 do
+			local ang = k * math.pi * 2 / 5
+			deco(a.box("Balloon", Vector3.new(1.6, 2, 1.6), Vector3.new(c[1] + math.cos(ang) * 1.3, 9.6 + (k % 2) * 0.8, c[2] + math.sin(ang) * 1.3), Color3.fromHSV((k * 0.2 + c[1] * 0.01) % 1, 0.8, 1)))
+		end
+	end
+
+	-- tenda de circo (escalavel)
+	for i, t in ipairs({ { 22, 6 }, { 16, 5 }, { 10, 5 }, { 5, 4 } }) do
+		local y = 0
+		for k = 1, i - 1 do y = y + ({ 6, 5, 5, 4 })[k] end
+		cap(a.box("Tent", Vector3.new(t[1], t[2], t[1]), Vector3.new(40, y + t[2] / 2, -32), (i % 2 == 1) and RED or WHT))
+	end
+	a.box("TentPole", Vector3.new(0.4, 5, 0.4), Vector3.new(40, 22.5, -32), Color3.fromRGB(200, 200, 205))
+	deco(a.box("TentFlag", Vector3.new(2.6, 1.6, 0.2), Vector3.new(41.4, 24, -32), Color3.fromRGB(250, 205, 50)))
+
+	-- ===== RODA-GIGANTE (fisica real) =====
+	local HUBREL = Vector3.new(-38, 37, -10)
+	local HUB = a.Center + HUBREL
+	local R, NC = 28, 10
+	local hub, wheelParts = nil, {}
+	local function wp(nm, size, cf, color, collide, mat)
+		local p = P(a.Folder, nm, size, cf, color, mat)
+		p.Anchored = false
+		p.CanCollide = collide
+		if not collide then p.CanTouch, p.CanQuery = false, false end
+		wheelParts[#wheelParts + 1] = p
+		return p
+	end
+	local axle = P(a.Folder, "Axle", Vector3.new(15, 2, 2), CFrame.new(HUB), Color3.fromRGB(90, 90, 105))
+	axle.CanCollide = false
+	hub = wp("Hub", Vector3.new(11, 3, 3), CFrame.new(HUB), Color3.fromRGB(240, 240, 245), false)
+	local hl = Instance.new("PointLight")
+	hl.Range, hl.Brightness, hl.Color, hl.Shadows = 60, 1, Color3.fromRGB(255, 210, 140), false
+	hl.Parent = hub
+	for i = 0, 19 do
+		local ang = i / 20 * math.pi * 2
+		for _, sx in ipairs({ -3.5, 3.5 }) do
+			local rim = wp("Rim", Vector3.new(1.2, 1.2, 9), CFrame.new(HUB + Vector3.new(sx, 0, 0)) * CFrame.Angles(ang, 0, 0) * CFrame.new(0, R, 0), (i % 2 == 0) and Color3.fromRGB(235, 70, 70) or Color3.fromRGB(250, 205, 50), false)
+			weld(hub, rim)
+			local b = wp("RimBulb", Vector3.new(0.9, 0.9, 0.9), CFrame.new(HUB + Vector3.new(sx * 1.17, 0, 0)) * CFrame.Angles(ang, 0, 0) * CFrame.new(0, R + 0.1, 0), Color3.fromRGB(255, 240, 120), false, Enum.Material.Neon)
+			bulb(b)
+			weld(hub, b)
+		end
+	end
+	for i = 0, 9 do
+		local ang = i / 10 * math.pi * 2
+		for _, sx in ipairs({ -3.5, 3.5 }) do
+			local sk = wp("Spoke", Vector3.new(0.8, R, 0.8), CFrame.new(HUB + Vector3.new(sx, 0, 0)) * CFrame.Angles(ang, 0, 0) * CFrame.new(0, R / 2, 0), Color3.new(1, 1, 1), false)
+			weld(hub, sk)
+		end
+	end
+	for i = 0, NC - 1 do
+		local ang = i / NC * math.pi * 2
+		local barCF = CFrame.new(HUB) * CFrame.Angles(ang, 0, 0) * CFrame.new(0, R, 0)
+		local bar = wp("Bar", Vector3.new(7.8, 1, 1), barCF, Color3.fromRGB(235, 235, 240), false)
+		weld(hub, bar)
+		local rc = CFrame.new(barCF.Position + Vector3.new(0, -2.65, 0))
+		local col = Color3.fromHSV(i / NC, 0.75, 1)
+		local function cp(nm, sz, off, c, collide) return wp(nm, sz, rc * CFrame.new(off), c, collide) end
+		local roof = cp("CabinRoof", Vector3.new(6, 0.5, 6), Vector3.new(0, 0, 0), col, true)
+		local parts = {
+			cp("CabinFloor", Vector3.new(5.6, 0.5, 5.6), Vector3.new(0, -4.5, 0), Color3.fromRGB(80, 80, 95), true),
+			cp("Hanger", Vector3.new(0.4, 2.4, 0.4), Vector3.new(0, 1.45, 0), Color3.fromRGB(235, 235, 240), false),
+			cp("RailX", Vector3.new(0.4, 1.4, 5.6), Vector3.new(2.8, -3.55, 0), col, true),
+			cp("RailX", Vector3.new(0.4, 1.4, 5.6), Vector3.new(-2.8, -3.55, 0), col, true),
+			cp("RailZ", Vector3.new(5.6, 1.4, 0.4), Vector3.new(0, -3.55, 2.8), col, true),
+			cp("RailZ", Vector3.new(5.6, 1.4, 0.4), Vector3.new(0, -3.55, -2.8), col, true),
+		}
+		for _, c in ipairs({ { 2.75, 2.75 }, { -2.75, 2.75 }, { 2.75, -2.75 }, { -2.75, -2.75 } }) do
+			parts[#parts + 1] = cp("CabinPost", Vector3.new(0.5, 4, 0.5), Vector3.new(c[1], -2.25, c[2]), Color3.fromRGB(235, 235, 240), false)
+		end
+		local lightBulb = cp("CabinBulb", Vector3.new(1, 1, 1), Vector3.new(0, 0.9, 0), Color3.fromRGB(255, 240, 120), false)
+		lightBulb.Material = Enum.Material.Neon
+		bulb(lightBulb)
+		parts[#parts + 1] = lightBulb
+		for _, p in ipairs(parts) do weld(roof, p) end
+		-- articulacao: o cabo gira livre na barra, e a cabine e mantida SEMPRE na vertical
+		local a0 = Instance.new("Attachment")
+		a0.Parent = bar
+		local a1 = Instance.new("Attachment")
+		a1.Position = Vector3.new(0, 1.2, 0)
+		a1.Parent = parts[2]
+		local bs = Instance.new("BallSocketConstraint")
+		bs.Attachment0, bs.Attachment1, bs.Parent = a0, a1, bar
+		local a2 = Instance.new("Attachment")
+		a2.Parent = roof
+		local ao = Instance.new("AlignOrientation")
+		ao.Mode, ao.Attachment0, ao.CFrame, ao.RigidityEnabled = Enum.OrientationAlignmentMode.OneAttachment, a2, CFrame.new(), true
+		ao.Parent = roof
+		cap(roof)
+	end
+	-- motor
+	local h0, h1 = Instance.new("Attachment"), Instance.new("Attachment")
+	h0.Parent, h1.Parent = axle, hub
+	local hinge = Instance.new("HingeConstraint")
+	hinge.Attachment0, hinge.Attachment1 = h0, h1
+	hinge.ActuatorType = Enum.ActuatorType.Motor
+	hinge.AngularVelocity = 0.3
+	hinge.MotorMaxTorque = 1e9
+	hinge.Parent = axle
+	pcall(function() hub:SetNetworkOwner(nil) end)
+	for _, p in ipairs(wheelParts) do
+		if p.Name == "CabinRoof" then pcall(function() p:SetNetworkOwner(nil) end) end
+	end
+	-- estrutura de apoio, plataforma e fila
+	local legLen = math.sqrt(37 * 37 + 16 * 16)
+	for _, sx in ipairs({ -5.5, 5.5 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			local c = a.Center + Vector3.new(HUBREL.X + sx, 18.5, HUBREL.Z + sz * 8)
+			P(a.Folder, "WheelLeg", Vector3.new(1.6, legLen, 1.6), CFrame.new(c) * CFrame.Angles(math.atan2(-sz * 16, 37), 0, 0), Color3.fromRGB(235, 235, 245))
+		end
+	end
+	a.box("WheelPlatform", Vector3.new(10, 0.3, 12), Vector3.new(HUBREL.X, 0.15, HUBREL.Z), Color3.fromRGB(250, 205, 50))
+	local function lowrail(x0, z0, x1, z1)
+		local dx, dz = x1 - x0, z1 - z0
+		local len = math.sqrt(dx * dx + dz * dz)
+		a.box("QueueRail", Vector3.new(0.3, 0.3, len), Vector3.new((x0 + x1) / 2, 1.1, (z0 + z1) / 2), Color3.new(1, 1, 1), PLASTIC, 0, math.atan2(dx, dz))
+		for i = 0, math.max(1, math.floor(len / 4)) do
+			a.box("QueuePost", Vector3.new(0.4, 1.3, 0.4), Vector3.new(x0 + dx * i / math.max(1, math.floor(len / 4)), 0.65, z0 + dz * i / math.max(1, math.floor(len / 4))), Color3.fromRGB(235, 70, 70))
+		end
+	end
+	local wx, wz = HUBREL.X, HUBREL.Z
+	lowrail(wx - 6.5, wz - 8, wx - 6.5, wz + 8)
+	lowrail(wx + 6.5, wz - 8, wx + 6.5, wz - 2)
+	lowrail(wx + 6.5, wz + 2, wx + 6.5, wz + 8)
+	a.box("WheelSignPost", Vector3.new(0.6, 8, 0.6), Vector3.new(wx + 9, 4, wz - 9), Color3.fromRGB(235, 70, 70))
+	sign(a.box("WheelSign", Vector3.new(7, 2, 0.5), Vector3.new(wx + 9, 9, wz - 9), Color3.fromRGB(60, 40, 30)), "RODA-GIGANTE", 0, 300, 60)
+
+	for k = -40, 40, 10 do
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, 46)
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, -48)
+	end
+end
+
+-- 7) DINO WORLD (EVENTO): selva, portao, cerca eletrica, rio com vagonetes e um T-Rex animado
+do
+	local a = newArena("Dino World (EVENTO)", Vector3.new(0, 0, -650), 15, true)
+	dinoArena = a
+	a.box("FloorS", Vector3.new(SIZE, 2, 50), Vector3.new(0, -1, 35), Color3.fromRGB(60, 120, 50))
+	a.box("FloorN", Vector3.new(SIZE, 2, 50), Vector3.new(0, -1, -35), Color3.fromRGB(60, 120, 50))
+	a.box("Riverbed", Vector3.new(SIZE, 2, 20), Vector3.new(0, -4.5, 0), Color3.fromRGB(150, 130, 90))
+	walls(a)
+	hazard(a.box("River", Vector3.new(SIZE, 2.8, 20), Vector3.new(0, -2.1, 0), Color3.fromRGB(60, 150, 190), PLASTIC, 0.3), " caiu no rio!")
+	a.box("Ford", Vector3.new(12, 1, 20.4), Vector3.new(0, -0.5, 0), Color3.fromRGB(140, 135, 125))
+	-- vagonetes do passeio (trilhos com servo)
+	local cars = {}
+	for _, x in ipairs({ -25, 25 }) do
+		local track = P(a.Folder, "Track", Vector3.new(1, 1, 1), CFrame.new(a.Center + Vector3.new(x, 0.5, 0)), Color3.new(0, 0, 0), PLASTIC, 1)
+		track.CanCollide = false
+		local car = P(a.Folder, "RailCar", Vector3.new(8, 1, 8), CFrame.new(a.Center + Vector3.new(x, 0.5, 0)), Color3.fromRGB(235, 200, 60))
+		car.Anchored = false
+		car.CustomPhysicalProperties = PhysicalProperties.new(1, 2, 0, 1, 1)
+		local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+		a0.CFrame, a1.CFrame = CFrame.Angles(0, math.pi / 2, 0), CFrame.Angles(0, math.pi / 2, 0)
+		a0.Parent, a1.Parent = track, car
+		local pc = Instance.new("PrismaticConstraint")
+		pc.Attachment0, pc.Attachment1 = a0, a1
+		pc.ActuatorType = Enum.ActuatorType.Servo
+		pc.ServoMaxForce, pc.LinearResponsiveness, pc.Speed = 1e7, 40, 6
+		pc.LimitsEnabled, pc.LowerLimit, pc.UpperLimit, pc.TargetPosition = true, -15, 15, 0
+		pc.Parent = track
+		cars[#cars + 1] = pc
+		pcall(function() car:SetNetworkOwner(nil) end)
+		for _, rx in ipairs({ -2.5, 2.5 }) do deco(a.box("Rail", Vector3.new(0.5, 0.3, 36), Vector3.new(x + rx, 0, 0), Color3.fromRGB(120, 120, 130))) end
+	end
+	task.spawn(function()
+		local dir = 1
+		while true do
+			if cars[1] then cars[1].TargetPosition = dir * 14 end
+			if cars[2] then cars[2].TargetPosition = -dir * 14 end
+			dir = -dir
+			task.wait(5)
+		end
+	end)
+	-- cercas eletricas
+	local function fence(x0, x1, z)
+		local len = x1 - x0
+		local n = math.max(1, math.floor(len / 6))
+		for i = 0, n do a.box("FencePost", Vector3.new(0.8, 10, 0.8), Vector3.new(x0 + i * (len / n), 5, z), Color3.fromRGB(180, 180, 190)) end
+		for _, y in ipairs({ 3, 6, 9 }) do
+			a.box("Wire", Vector3.new(len, 0.25, 0.25), Vector3.new((x0 + x1) / 2, y, z), Color3.fromRGB(255, 230, 60), Enum.Material.Neon)
+		end
+	end
+	for _, z in ipairs({ -14, 14 }) do
+		fence(-58, -31, z)
+		fence(-19, -6, z)
+		fence(6, 19, z)
+		fence(31, 58, z)
+	end
+	sign(a.box("Warning", Vector3.new(5, 3, 0.4), Vector3.new(-9, 5, 14), Color3.fromRGB(255, 200, 40)), "CUIDADO: T-REX", 0, 260, 60)
+	-- portao
+	for _, x in ipairs({ -16, 16 }) do
+		a.box("GatePillar", Vector3.new(8, 22, 8), Vector3.new(x, 11, 55), Color3.fromRGB(130, 120, 110))
+		deco(a.box("Torch", Vector3.new(1.2, 2, 1.2), Vector3.new(x, 23, 55), Color3.fromRGB(255, 140, 40), Enum.Material.Neon))
+	end
+	a.box("GateBeam", Vector3.new(40, 4, 4), Vector3.new(0, 20, 55), Color3.fromRGB(110, 75, 40))
+	sign(a.box("GateSign", Vector3.new(26, 5, 1), Vector3.new(0, 25, 55), Color3.fromRGB(230, 150, 30)), "DINO WORLD", 0, 520, 110)
+	-- passarela, selva, montanha e cachoeira
+	deco(a.box("Boardwalk", Vector3.new(8, 0.25, 36), Vector3.new(0, 0.12, 38), Color3.fromRGB(170, 120, 70)))
+	deco(a.box("Boardwalk", Vector3.new(8, 0.25, 36), Vector3.new(0, 0.12, -38), Color3.fromRGB(170, 120, 70)))
+	for i, t in ipairs({ { -52, -26 }, { -52, -48 }, { -52, 26 }, { -52, 48 }, { 52, -26 }, { 52, -48 }, { 52, 26 }, { 52, 48 }, { -30, -54 }, { 30, -54 }, { -30, 54 }, { 30, 54 } }) do
+		if i % 3 == 0 then palm(a, t[1], t[2], 14) else tree(a, t[1], t[2], 9, Color3.fromRGB(30, 120, 50)) end
+	end
+	a.box("Mountain", Vector3.new(70, 10, 10), Vector3.new(0, 5, -55), Color3.fromRGB(110, 105, 100))
+	a.box("Mountain", Vector3.new(50, 8, 8), Vector3.new(0, 14, -55), Color3.fromRGB(95, 90, 88))
+	a.box("Mountain", Vector3.new(30, 8, 6), Vector3.new(0, 22, -55), Color3.fromRGB(85, 80, 78))
+	deco(a.box("Waterfall", Vector3.new(5, 10, 0.8), Vector3.new(-18, 5, -49.6), Color3.fromRGB(150, 210, 255), PLASTIC, 0.35))
+	for _, b in ipairs({ { -26, 0, -18 }, { 30, 0, 20 } }) do
+		for k = -2, 2 do a.box("Rib", Vector3.new(0.7, 3.5, 0.7), Vector3.new(b[1] + k * 2.2, 1.75, b[3]), BONE) end
+	end
+	-- jipe
+	local jb = CFrame.new(a.Center + Vector3.new(46, 0, 50)) * CFrame.Angles(0, 0.5, 0)
+	local function jp(nm, sz, off, col)
+		return P(a.Folder, nm, sz, jb * CFrame.new(off), col)
+	end
+	jp("JeepBody", Vector3.new(6, 2.5, 12), Vector3.new(0, 2.2, 0), Color3.fromRGB(215, 170, 90))
+	jp("JeepHood", Vector3.new(5.6, 1.4, 3.5), Vector3.new(0, 3.2, -4.5), Color3.fromRGB(190, 60, 50))
+	for _, sx in ipairs({ -3.2, 3.2 }) do
+		for _, sz in ipairs({ -3.8, 3.8 }) do jp("Wheel", Vector3.new(1, 2.6, 2.6), Vector3.new(sx, 1.3, sz), Color3.fromRGB(30, 30, 35)) end
+		for _, sz in ipairs({ -1, 3 }) do deco(jp("Roll", Vector3.new(0.4, 3, 0.4), Vector3.new(sx * 0.9, 4.7, sz), Color3.fromRGB(190, 190, 195))) end
+	end
+	deco(jp("RollTop", Vector3.new(6, 0.4, 4.4), Vector3.new(0, 6.3, 1), Color3.fromRGB(190, 190, 195)))
+
+	-- T-REX com animacao procedural (andar, rabo, cabeca, mandibula, rugido)
+	local V = Vector3.new
+	local G, D, K, Wt = Color3.fromRGB(70, 140, 60), Color3.fromRGB(50, 105, 45), Color3.fromRGB(20, 20, 20), Color3.fromRGB(245, 240, 225)
+	local trexM = Instance.new("Model")
+	trexM.Name = "TRex"
+	trexM.Parent = a.Folder
+	local rig = {}
+	local function tp(name, size, x, y, z, col, pvt, anim)
+		local p = Instance.new("Part")
+		p.Name, p.Size, p.Color, p.Material, p.Anchored, p.CanCollide = name, size, col, PLASTIC, true, false
+		for _, f in ipairs(FACES) do p[f] = Enum.SurfaceType.Studs end
+		p.Parent = trexM
+		local rest = CFrame.new(x, y, z)
+		rig[#rig + 1] = { p = p, rest = rest, pvt = pvt and CFrame.new(pvt) or rest, anim = anim }
+	end
+	tp("Body", V(6, 6.5, 12), 0, 10, 0, G)
+	tp("Chest", V(5.5, 6.5, 5), 0, 11.2, -6.5, G)
+	for i = -2, 2 do tp("Spike", V(0.6, 1, 1.4), 0, 13.8, i * 2.3, D) end
+	tp("Neck", V(3.5, 4, 4), 0, 14.2, -8.5, G, V(0, 12, -7), "head")
+	tp("Head", V(4, 3.6, 6), 0, 16.6, -11.5, G, V(0, 12, -7), "head")
+	tp("Jaw", V(3.4, 1, 5.5), 0, 14.6, -11.2, D, V(0, 14.8, -8.6), "jaw")
+	for i = -2, 2 do
+		tp("Tooth", V(0.4, 0.7, 0.4), i * 0.7, 14.45, -14.2, Wt, V(0, 12, -7), "head")
+		tp("Tooth", V(0.4, 0.7, 0.4), i * 0.7, 15.45, -13.7, Wt, V(0, 14.8, -8.6), "jaw")
+	end
+	for _, s in ipairs({ -1, 1 }) do
+		tp("Eye", V(0.7, 0.7, 0.4), 2.05 * s, 17.4, -12.5, K, V(0, 12, -7), "head")
+		tp("Arm", V(0.8, 2.2, 0.8), 2.9 * s, 11.2, -9, G, V(2.9 * s, 12.3, -9), "arm")
+		local an = (s < 0) and "legL" or "legR"
+		local hip = V(3.2 * s, 7.5, 1.5)
+		tp("Thigh", V(2.8, 5, 3.4), 3.2 * s, 5, 1.5, G, hip, an)
+		tp("Shin", V(1.8, 2.6, 2.2), 3.2 * s, 1.5, 1.2, D, hip, an)
+		tp("Foot", V(2.8, 0.8, 5), 3.2 * s, 0.4, -0.2, D, hip, an)
+	end
+	tp("Tail1", V(4, 4, 6), 0, 9.5, 8.5, G, V(0, 9.5, 5.5), "tail1")
+	tp("Tail2", V(3, 3, 6), 0, 9.2, 14, G, V(0, 9.2, 11), "tail2")
+	tp("Tail3", V(1.8, 1.8, 5), 0, 9, 19, D, V(0, 9, 16.5), "tail3")
+
+	local function pose(root, t)
+		local rt = t % 10
+		local roar = (rt > 8 and rt < 9.2) and math.sin((rt - 8) / 1.2 * math.pi) or 0
+		local ph = t * 4.5
+		local base = root * CFrame.new(0, math.abs(math.sin(ph)) * 0.35, 0)
+		for _, r in ipairs(rig) do
+			local rot, an = CFrame.new(), r.anim
+			if an == "legL" then rot = CFrame.Angles(math.sin(ph) * 0.45, 0, 0)
+			elseif an == "legR" then rot = CFrame.Angles(-math.sin(ph) * 0.45, 0, 0)
+			elseif an == "head" then rot = CFrame.Angles(math.sin(t * 2) * 0.05 + roar * 0.35, 0, 0)
+			elseif an == "jaw" then rot = CFrame.Angles(-(0.12 + 0.1 * math.sin(t * 3) + roar * 0.7), 0, 0)
+			elseif an == "arm" then rot = CFrame.Angles(math.sin(t * 3) * 0.3, 0, 0)
+			elseif an == "tail1" then rot = CFrame.Angles(0, math.sin(t * 2) * 0.18, 0)
+			elseif an == "tail2" then rot = CFrame.Angles(0, math.sin(t * 2 - 0.6) * 0.3, 0)
+			elseif an == "tail3" then rot = CFrame.Angles(0, math.sin(t * 2 - 1.2) * 0.4, 0) end
+			r.p.CFrame = base * r.pvt * rot * r.pvt:Inverse() * r.rest
+		end
+	end
+	local wps = { { 0, 38 }, { 32, 28 }, { 0, 20 }, { 0, 0 }, { 0, -20 }, { -32, -28 }, { 0, -38 }, { 32, -28 }, { 0, -20 }, { 0, 0 }, { 0, 20 }, { -32, 28 } }
+	local pos, hd, wi, tclock = a.Center + Vector3.new(0, 0, 38), Vector3.new(0, 0, -1), 2, 0
+	trexRoot = CFrame.lookAt(pos, pos + hd)
+	pose(trexRoot, 0)
+	trexReset = function()
+		pos, hd, wi = a.Center + Vector3.new(0, 0, 38), Vector3.new(0, 0, -1), 2
+	end
+	RunS.Heartbeat:Connect(function(dt)
+		if not dinoActive then return end
+		tclock = tclock + dt
+		local w = wps[wi]
+		local d = Vector3.new(a.Center.X + w[1] - pos.X, 0, a.Center.Z + w[2] - pos.Z)
+		if d.Magnitude < 2.5 then
+			wi = wi % #wps + 1
+		else
+			hd = hd:Lerp(d.Unit, math.min(1, dt * 2.5))
+			hd = (hd.Magnitude > 0.01) and hd.Unit or d.Unit
+			pos = pos + hd * 9 * dt
+		end
+		trexRoot = CFrame.lookAt(pos, pos + hd)
+		pose(trexRoot, tclock)
+	end)
+	for k = -40, 40, 10 do
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, 44)
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(k, 4, -44)
+	end
+end
+
+-- 4) ARENA DOS BOTS (so para partidas com bots, fora do sorteio)
+do
+	local a = newArena("Arena dos Bots", Vector3.new(0, 0, -300), 14, true)
+	botArena = a
+	a.box("Floor", Vector3.new(SIZE, 2, SIZE), Vector3.new(0, -1, 0), Color3.fromRGB(140, 175, 255))
+	walls(a)
+	local s1 = a.box("Stripe", Vector3.new(SIZE - 4, 0.2, 2), Vector3.new(0, 0.1, 0), Color3.fromRGB(255, 255, 255))
+	local s2 = a.box("Stripe", Vector3.new(2, 0.2, SIZE - 4), Vector3.new(0, 0.1, 0), Color3.fromRGB(255, 255, 255))
+	s1.CanCollide, s2.CanCollide = false, false
+	a.box("Center", Vector3.new(16, 5, 16), Vector3.new(0, 2.5, 0), Color3.fromRGB(255, 200, 80))
+	for i, p in ipairs({ { -30, -30 }, { 30, -30 }, { -30, 30 }, { 30, 30 }, { -30, 0 }, { 30, 0 }, { 0, -30 }, { 0, 30 } }) do
+		a.box("Pillar", Vector3.new(5, 6, 5), Vector3.new(p[1], 3, p[2]), Color3.fromHSV(i / 8, 0.5, 1))
+	end
+	for i = 0, 15 do
+		local ang = i / 16 * math.pi * 2
+		a.Spawns[#a.Spawns + 1] = a.Center + Vector3.new(math.cos(ang) * 45, 4, math.sin(ang) * 45)
+	end
+end
+
+-- ===== estado / dados =====
+local function count() local n = 0 for _ in pairs(alive) do n = n + 1 end return n end
+local function okChar(p)
+	local c = p.Character
+	local h = c and c:FindFirstChildOfClass("Humanoid")
+	return h and h.Health > 0 and c:FindFirstChild("HumanoidRootPart") ~= nil
+end
+local function aliveList()
+	local t = {}
+	for p in pairs(alive) do if okChar(p) then t[#t + 1] = p end end
+	return t
+end
+local function payload()
+	local a = currentArena or nextArena
+	return { Phase = phase, Text = status, Alive = count(), Holder = holder and holder.DisplayName or "", Arena = a and a.Name or "", BombEnd = holder and (workspace:GetServerTimeNow() + (bombEnd - os.clock())) or 0 }
+end
+local function push() rState:FireAllClients(payload()) end
+local function msg(t, color) rMsg:FireAllClients(t, color) end
+
+local store
+pcall(function() store = DSS:GetDataStore("PassaBomba_v2") end)
+local PD = {}
+local function stat(p, name, delta)
+	if isBot(p) then return end
+	local ls = p:FindFirstChild("leaderstats")
+	local v = ls and ls:FindFirstChild(name)
+	if v then v.Value = v.Value + delta end
+end
+local function pushSkins(p)
+	local pd = PD[p]
+	if pd then rSkinState:FireClient(p, { Owned = pd.Owned, Equipped = pd.Equipped, Burgers = pd.Burgers or 0 }) end
+end
+local function save(p)
+	local ls, pd = p:FindFirstChild("leaderstats"), PD[p]
+	if store and ls and pd then
+		pcall(function()
+			store:SetAsync("u" .. p.UserId, { Wins = ls.Wins.Value, Coins = ls.Coins.Value, Owned = pd.Owned, Equipped = pd.Equipped, Receipts = pd.ReceiptList, Burgers = pd.Burgers })
+		end)
+	end
+end
+local function onJoin(p)
+	local ls = Instance.new("Folder")
+	ls.Name = "leaderstats"
+	local wins, coins = Instance.new("IntValue"), Instance.new("IntValue")
+	wins.Name, coins.Name = "Wins", "Coins"
+	wins.Parent, coins.Parent = ls, ls
+	local pd = { Owned = { classic = true }, Equipped = "classic", Receipts = {}, ReceiptList = {}, Burgers = 0 }
+	if store then
+		local ok, v = pcall(function() return store:GetAsync("u" .. p.UserId) end)
+		if ok and type(v) == "table" then
+			wins.Value, coins.Value = v.Wins or 0, v.Coins or 0
+			pd.Owned = v.Owned or pd.Owned
+			pd.Owned.classic = true
+			if v.Equipped and pd.Owned[v.Equipped] then pd.Equipped = v.Equipped end
+			pd.ReceiptList = v.Receipts or {}
+			pd.Burgers = v.Burgers or 0
+			for _, rid in ipairs(pd.ReceiptList) do pd.Receipts[rid] = true end
+		end
+	end
+	PD[p] = pd
+	ls.Parent = p
+	rState:FireClient(p, payload())
+	pushSkins(p)
+end
+Players.PlayerAdded:Connect(onJoin)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(onJoin, p) end
+Players.PlayerRemoving:Connect(function(p)
+	save(p)
+	alive[p] = nil
+	PD[p] = nil
+end)
+game:BindToClose(function() for _, p in ipairs(Players:GetPlayers()) do save(p) end end)
+
+-- skins: equipar / comprar com moedas / comprar com Robux
+rSkinAct.OnServerEvent:Connect(function(p, action, id)
+	local pd = PD[p]
+	if action == "pack" then
+		local pk = type(id) == "string" and PackBy[id]
+		if not pd or not pk then return end
+		if not pk.ProductId or pk.ProductId == 0 then
+			rMsg:FireClient(p, "Cole o ProductId deste pacote no PBConfig", Color3.fromRGB(255, 200, 80))
+			return
+		end
+		pcall(function() MPS:PromptProductPurchase(p, pk.ProductId) end)
+		return
+	end
+	if action == "burger" then
+		local ls = p:FindFirstChild("leaderstats")
+		if not pd or not ls then return end
+		if not alive[p] or phase ~= "playing" then
+			rMsg:FireClient(p, "Compre o hamburguer durante a partida!", Color3.fromRGB(255, 200, 80))
+			return
+		end
+		if ls.Coins.Value < CFG.BurgerCoins then
+			rMsg:FireClient(p, "Moedas insuficientes", Color3.fromRGB(255, 120, 100))
+			return
+		end
+		ls.Coins.Value = ls.Coins.Value - CFG.BurgerCoins
+		boost[p] = { Until = os.clock() + CFG.BurgerTime, Mult = CFG.BurgerMult }
+		rMsg:FireClient(p, "Hamburguer! Velocidade extra por " .. CFG.BurgerTime .. "s", Color3.fromRGB(255, 200, 80))
+		return
+	elseif action == "eatduplo" then
+		if not pd or (pd.Burgers or 0) <= 0 then return end
+		if not alive[p] or phase ~= "playing" then
+			rMsg:FireClient(p, "Coma durante a partida!", Color3.fromRGB(255, 200, 80))
+			return
+		end
+		pd.Burgers = pd.Burgers - 1
+		boost[p] = { Until = os.clock() + CFG.DoubleTime, Mult = CFG.DoubleMult }
+		pushSkins(p)
+		rMsg:FireClient(p, "Hamburguer DUPLO! Super velocidade por " .. CFG.DoubleTime .. "s", Color3.fromRGB(255, 160, 60))
+		return
+	elseif action == "buyduplo" then
+		local bp = CF.BurgerPack
+		if not pd then return end
+		if not bp.ProductId or bp.ProductId == 0 then
+			rMsg:FireClient(p, "Cole o ProductId do combo no PBConfig", Color3.fromRGB(255, 200, 80))
+			return
+		end
+		pcall(function() MPS:PromptProductPurchase(p, bp.ProductId) end)
+		return
+	end
+	local s = type(id) == "string" and SkinBy[id]
+	if not pd or not s then return end
+	if action == "equip" then
+		if pd.Owned[id] then
+			pd.Equipped = id
+			pushSkins(p)
+		end
+	elseif action == "coins" then
+		local ls = p:FindFirstChild("leaderstats")
+		if pd.Owned[id] or not s.Coins or not ls then return end
+		if ls.Coins.Value < s.Coins then
+			rMsg:FireClient(p, "Moedas insuficientes", Color3.fromRGB(255, 120, 100))
+			return
+		end
+		ls.Coins.Value = ls.Coins.Value - s.Coins
+		pd.Owned[id], pd.Equipped = true, id
+		save(p)
+		pushSkins(p)
+		rMsg:FireClient(p, "Skin " .. s.Name .. " comprada!", Color3.fromRGB(120, 255, 140))
+	elseif action == "robux" then
+		if pd.Owned[id] or not s.Robux then return end
+		if not s.ProductId or s.ProductId == 0 then
+			rMsg:FireClient(p, "Cole o ProductId desta skin no PBConfig", Color3.fromRGB(255, 200, 80))
+			return
+		end
+		pcall(function() MPS:PromptProductPurchase(p, s.ProductId) end)
+	end
+end)
+local productSkin = {}
+for _, s in ipairs(CF.Skins) do
+	if s.ProductId and s.ProductId > 0 then productSkin[s.ProductId] = s end
+end
+local productPack = {}
+for _, k in ipairs(CF.CoinPacks) do
+	if k.ProductId and k.ProductId > 0 then productPack[k.ProductId] = k end
+end
+MPS.ProcessReceipt = function(info)
+	local p = Players:GetPlayerByUserId(info.PlayerId)
+	local pd = p and PD[p]
+	if not pd then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	local rid = tostring(info.PurchaseId)
+	if pd.Receipts[rid] then return Enum.ProductPurchaseDecision.PurchaseGranted end
+	local s, pk = productSkin[info.ProductId], productPack[info.ProductId]
+	local bg = CF.BurgerPack.ProductId and CF.BurgerPack.ProductId > 0 and info.ProductId == CF.BurgerPack.ProductId
+	if not s and not pk and not bg then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	pd.Receipts[rid] = true
+	pd.ReceiptList[#pd.ReceiptList + 1] = rid
+	if #pd.ReceiptList > 100 then
+		local oldId = table.remove(pd.ReceiptList, 1)
+		pd.Receipts[oldId] = nil
+	end
+	if s then
+		pd.Owned[s.Id], pd.Equipped = true, s.Id
+		pushSkins(p)
+		rMsg:FireClient(p, "Skin " .. s.Name .. " comprada!", Color3.fromRGB(120, 255, 140))
+	elseif bg then
+		pd.Burgers = (pd.Burgers or 0) + CF.BurgerPack.Count
+		pushSkins(p)
+		rMsg:FireClient(p, "+" .. CF.BurgerPack.Count .. " hamburgueres duplos!", Color3.fromRGB(255, 200, 80))
+	else
+		stat(p, "Coins", pk.Coins)
+		rMsg:FireClient(p, "+" .. pk.Coins .. " moedas!", Color3.fromRGB(255, 220, 80))
+	end
+	save(p)
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+
+-- ===== lobby interativo =====
+local function addPrompt(part, action, obj, cb)
+	local pr = Instance.new("ProximityPrompt")
+	pr.ActionText, pr.ObjectText, pr.MaxActivationDistance, pr.HoldDuration, pr.RequiresLineOfSight = action, obj, 12, 0, false
+	pr.Style = Enum.ProximityPromptStyle.Custom -- UI pequena feita no cliente
+	pr.Parent = part
+	pr.Triggered:Connect(cb)
+end
+addPrompt(skinCounter, "Abrir", "Loja de Skins", function(p) rOpenUI:FireClient(p, "skins") end)
+addPrompt(coinCounter, "Abrir", "Loja de Moedas", function(p) rOpenUI:FireClient(p, "coins") end)
+addPrompt(botCounter, "Jogar", "Partida com Bots", function(p) rOpenUI:FireClient(p, "bots") end)
+if chefNPC then
+	addPrompt(chefNPC.PrimaryPart, "Comprar hamburguer", "Chef Pierre", function(p) rOpenUI:FireClient(p, "chef") end)
+	RunS.Heartbeat:Connect(function()
+		if chefAnimate then chefAnimate(os.clock()) end
+	end)
+end
+
+local petsFolder = Instance.new("Folder")
+petsFolder.Name = "CapyPets"
+petsFolder.Parent = workspace
+local followers = {}
+local function ensureFollower(p)
+	local pd = PD[p]
+	if not pd or not pd.Owned.capybara then return end
+	local m = followers[p]
+	if m and m.Parent then return end
+	m = makeCapy(0.5)
+	m.Name = "CapyPet"
+	m.Parent = petsFolder
+	followers[p] = m
+end
+addPrompt(capyNPC.PrimaryPart, "Pegar skin gratis", "Capivara", function(p)
+	local pd = PD[p]
+	if not pd then return end
+	if pd.Owned.capybara then
+		rMsg:FireClient(p, "Voce ja tem a skin Capivara!", Color3.fromRGB(255, 220, 120))
+		return
+	end
+	pd.Owned.capybara, pd.Equipped = true, "capybara"
+	save(p)
+	pushSkins(p)
+	ensureFollower(p)
+	rMsg:FireClient(p, "A capivara te deu a skin Capivara de graca!", Color3.fromRGB(120, 255, 140))
+end)
+
+local capyBase = capyNPC:GetPivot()
+RunS.Heartbeat:Connect(function()
+	capyNPC:PivotTo(capyBase * CFrame.new(0, math.abs(math.sin(os.clock() * 2)) * 0.3, 0) * CFrame.Angles(0, math.sin(os.clock()) * 0.15, 0))
+	for p, m in pairs(followers) do
+		local hrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if hrp and m.Parent then
+			local bob = math.sin(os.clock() * 6) * 0.15
+			m:PivotTo(m:GetPivot():Lerp(hrp.CFrame * CFrame.new(3.5, -1.85 + bob, 3.5), 0.15))
+		end
+	end
+end)
+Players.PlayerRemoving:Connect(function(p)
+	if followers[p] then
+		followers[p]:Destroy()
+		followers[p] = nil
+	end
+end)
+task.spawn(function()
+	while true do
+		for _, p in ipairs(Players:GetPlayers()) do ensureFollower(p) end
+		task.wait(3)
+	end
+end)
+task.spawn(function()
+	while true do
+		local rows = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			local ls = p:FindFirstChild("leaderstats")
+			if ls then rows[#rows + 1] = { p.DisplayName, ls.Wins.Value } end
+		end
+		table.sort(rows, function(x, y) return x[2] > y[2] end)
+		local lines = { "RANKING DE VITORIAS" }
+		for i = 1, math.min(5, #rows) do lines[#lines + 1] = i .. ". " .. rows[i][1] .. "  -  " .. rows[i][2] end
+		rankLabel.Text = table.concat(lines, "\n")
+		task.wait(5)
+	end
+end)
+
+-- ===== bomba =====
+local function clearBomb()
+	for _, c in ipairs(conns) do c:Disconnect() end
+	conns = {}
+	if holder then
+		holder:SetAttribute("HasBomb", false)
+		local ch = holder.Character
+		local b = ch and ch:FindFirstChild("Bomb")
+		if b then b:Destroy() end
+		local h = ch and ch:FindFirstChildOfClass("Humanoid")
+		if h then h.WalkSpeed = isBot(holder) and CFG.BotNormalSpeed or CFG.NormalSpeed end
+	end
+	holder, bombPart, holderSkin = nil, nil, nil
+end
+
+local giveBomb
+local function onTouch(hit)
+	if not holder or os.clock() < passLock then return end
+	local model = hit:FindFirstAncestorOfClass("Model")
+	local other = model and (Players:GetPlayerFromCharacter(model) or botByModel[model])
+	if other and other ~= holder and alive[other] and okChar(other) then
+		passLock = os.clock() + CFG.PassCooldown
+		local from = holder
+		giveBomb(other)
+		msg(from.DisplayName .. " passou a bomba para " .. other.DisplayName .. "!", Color3.fromRGB(255, 200, 80))
+	end
+end
+
+giveBomb = function(p)
+	clearBomb()
+	holder = p
+	p:SetAttribute("HasBomb", true)
+	local ch = p.Character
+	local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+	local head = ch and ch:FindFirstChild("Head")
+	if not hum or not head then return end
+	hum.WalkSpeed = isBot(p) and CFG.BotHolderSpeed or CFG.HolderSpeed
+	local sid = isBot(p) and p.Skin or (PD[p] and PD[p].Equipped) or "classic"
+	local skin = SkinBy[sid] or CF.Skins[1]
+	holderSkin = skin
+	local m = Instance.new("Model")
+	m.Name = "Bomb"
+	local b = Instance.new("Part")
+	b.Name, b.Shape, b.Size, b.Color = "Body", Enum.PartType.Ball, Vector3.new(2.6, 2.6, 2.6), skin.Base
+	b.Material, b.CanCollide, b.Massless, b.CFrame = skin.Mat or Enum.Material.SmoothPlastic, false, true, head.CFrame * CFrame.new(0, 3, 0)
+	b.Parent = m
+	local f = Instance.new("Part")
+	f.Name, f.Size, f.Color, f.CanCollide, f.Massless = "Fuse", Vector3.new(0.35, 1, 0.35), skin.Fuse or Color3.fromRGB(170, 120, 60), false, true
+	f.CFrame = b.CFrame * CFrame.new(0, 1.6, 0)
+	f.Parent = m
+	local w1 = Instance.new("WeldConstraint")
+	w1.Part0, w1.Part1, w1.Parent = head, b, b
+	local w2 = Instance.new("WeldConstraint")
+	w2.Part0, w2.Part1, w2.Parent = b, f, f
+	local spk = Instance.new("Sparkles")
+	spk.SparkleColor = Color3.fromRGB(255, 170, 40)
+	spk.Parent = f
+	if skin.Effect == "fire" then
+		local fire = Instance.new("Fire")
+		fire.Size, fire.Heat, fire.Color, fire.SecondaryColor = 6, 8, skin.Flash, skin.Base
+		fire.Parent = b
+	elseif skin.Effect == "sparkles" then
+		local s2 = Instance.new("Sparkles")
+		s2.SparkleColor = skin.Flash
+		s2.Parent = b
+	end
+	local function dec(size, cf, color, mat, shape)
+		local d = Instance.new("Part")
+		d.Size, d.Color, d.Material, d.CanCollide, d.Massless = size, color, mat or PLASTIC, false, true
+		if shape then d.Shape = shape end
+		d.CFrame = b.CFrame * cf
+		d.Parent = m
+		local w = Instance.new("WeldConstraint")
+		w.Part0, w.Part1, w.Parent = b, d, d
+	end
+	local acc = skin.Accent or Color3.new(1, 1, 1)
+	if skin.Pattern == "stripes" then
+		for i = 0, 2 do dec(Vector3.new(0.18, 2.75, 2.75), CFrame.Angles(0, 0, math.rad(i * 60)), acc, nil, Enum.PartType.Cylinder) end
+	elseif skin.Pattern == "dots" or skin.Pattern == "stars" then
+		for i = 1, 12 do
+			local y = 1 - (i - 0.5) / 6
+			local r = math.sqrt(math.max(0, 1 - y * y))
+			local th = i * 2.4
+			local pos = Vector3.new(math.cos(th) * r, y, math.sin(th) * r) * 1.25
+			if skin.Pattern == "dots" then
+				dec(Vector3.new(0.5, 0.5, 0.5), CFrame.new(pos), acc, nil, Enum.PartType.Ball)
+			else
+				dec(Vector3.new(0.6, 0.6, 0.15), CFrame.lookAt(pos, pos * 2) * CFrame.Angles(0, 0, math.rad(45)), acc, Enum.Material.Neon)
+			end
+		end
+	elseif skin.Pattern == "skull" then
+		for _, sx in ipairs({ -0.45, 0.45 }) do dec(Vector3.new(0.5, 0.6, 0.2), CFrame.new(sx, 0.25, -1.2), acc) end
+		dec(Vector3.new(0.25, 0.35, 0.2), CFrame.new(0, -0.15, -1.25), acc)
+		for i = -2, 2 do dec(Vector3.new(0.12, 0.35, 0.2), CFrame.new(i * 0.26, -0.6, -1.15), acc) end
+	end
+	-- mini contador acima da bomba (o cliente atualiza o texto)
+	local bbg = Instance.new("BillboardGui")
+	bbg.Size, bbg.StudsOffset, bbg.AlwaysOnTop = UDim2.new(0, 54, 0, 22), Vector3.new(0, 2.6, 0), true
+	bbg.Parent = b
+	local tl = Instance.new("TextLabel")
+	tl.Name, tl.Size, tl.BackgroundColor3, tl.BackgroundTransparency = "T", UDim2.new(1, 0, 1, 0), Color3.new(0, 0, 0), 0.35
+	tl.TextColor3, tl.Font, tl.TextScaled, tl.Text = Color3.new(1, 1, 1), Enum.Font.FredokaOne, true, ""
+	tl.Parent = bbg
+	local tc = Instance.new("UICorner")
+	tc.CornerRadius = UDim.new(0, 8)
+	tc.Parent = tl
+	b:SetAttribute("EndT", workspace:GetServerTimeNow() + (bombEnd - os.clock()))
+	CS:AddTag(b, "PBBomb")
+	m.Parent = ch
+	bombPart = b
+	for _, d in ipairs(ch:GetDescendants()) do
+		if d:IsA("BasePart") then conns[#conns + 1] = d.Touched:Connect(onTouch) end
+	end
+	push()
+end
+
+local lastOn = nil
+RunS.Heartbeat:Connect(function()
+	if holder and bombPart and bombPart.Parent and holderSkin then
+		local frac = 1 - math.clamp((bombEnd - os.clock()) / bombTotal, 0, 1)
+		local on = math.sin(os.clock() * (3 + frac * 18)) > 0
+		if holderSkin.Rainbow then
+			bombPart.Color = Color3.fromHSV((os.clock() * 0.5) % 1, 0.9, on and 1 or 0.45)
+		end
+		if on ~= lastOn then
+			lastOn = on
+			if not holderSkin.Rainbow then bombPart.Color = on and holderSkin.Flash or holderSkin.Base end
+			bombPart.Material = on and Enum.Material.Neon or (holderSkin.Mat or Enum.Material.SmoothPlastic)
+		end
+	end
+end)
+
+eliminate = function(p, why)
+	if not alive[p] then return end
+	alive[p] = nil
+	local ch = p.Character
+	local h = ch and ch:FindFirstChildOfClass("Humanoid")
+	if p == holder then clearBomb() end
+	if h then h.Health = 0 end
+	msg(p.DisplayName .. why, Color3.fromRGB(255, 80, 60))
+	push()
+end
+
+local function explode(p)
+	local ch = p.Character
+	local pos = bombPart and bombPart.Position or (ch and ch:GetPivot().Position) or Vector3.new()
+	local ex = Instance.new("Explosion")
+	ex.Position, ex.BlastPressure, ex.BlastRadius, ex.DestroyJointRadiusPercent = pos, 150000, 14, 0
+	ex.Parent = workspace
+	eliminate(p, " explodiu!")
+end
+
+-- ===== atmosfera, Taco Event e Natal =====
+local EV = CF.Events
+
+local atm = Instance.new("Atmosphere")
+atm.Name, atm.Offset, atm.Parent = "PB_Atmosphere", 0.2, Lighting
+local cc = Instance.new("ColorCorrectionEffect")
+cc.Name, cc.Parent = "PB_CC", Lighting
+local bloom = Instance.new("BloomEffect")
+bloom.Name, bloom.Size, bloom.Threshold, bloom.Parent = "PB_Bloom", 24, 1.6, Lighting
+Lighting.GlobalShadows = true
+local MOODS = {
+	day = { Ambient = Color3.fromRGB(70, 70, 70), Outdoor = Color3.fromRGB(110, 110, 110), Density = 0.15, Haze = Color3.fromRGB(199, 199, 199), Tint = Color3.new(1, 1, 1), Bloom = 0.1, Brightness = 2 },
+	park = { Ambient = Color3.fromRGB(95, 85, 80), Outdoor = Color3.fromRGB(135, 120, 110), Density = 0.2, Haze = Color3.fromRGB(255, 214, 170), Tint = Color3.fromRGB(255, 244, 228), Bloom = 0.35, Brightness = 2.4, Clock = 17.6 },
+	xmas = { Ambient = Color3.fromRGB(60, 72, 105), Outdoor = Color3.fromRGB(95, 110, 150), Density = 0.42, Haze = Color3.fromRGB(190, 205, 235), Tint = Color3.fromRGB(225, 236, 255), Bloom = 0.5, Brightness = 1.6, Clock = 20 },
+}
+local function applyMood(name, clock)
+	local m = MOODS[name] or MOODS.day
+	Lighting.ClockTime = clock or m.Clock or 14
+	Lighting.Ambient, Lighting.OutdoorAmbient, Lighting.Brightness = m.Ambient, m.Outdoor, m.Brightness
+	atm.Density, atm.Color = m.Density, m.Haze
+	cc.TintColor = m.Tint
+	bloom.Intensity = m.Bloom
+end
+local function setScene(a)
+	local name = "day"
+	if xmasActive and (a == nil or a == parkArena) then
+		name = "xmas"
+	elseif a == parkArena then
+		name = "park"
+	end
+	applyMood(name, (name == "day") and (a and a.Clock or 14) or nil)
+end
+applyMood("day")
+
+-- ===== TACO EVENT (a cada 10 min). Os tacos sao desenhados no cliente (suave e leve); o servidor so decide posicao e coleta =====
+local rTaco = Instance.new("RemoteEvent")
+rTaco.Name, rTaco.Parent = "Taco", R
+local tacoLive = false
+
+local function eventArea()
+	if currentArena and phase == "playing" then return currentArena.Center, 48 end
+	return Vector3.new(0, 0, 0), 64
+end
+local function tacoPos(rec, now)
+	local t = now - rec.born
+	if t >= rec.fall then return Vector3.new(rec.x, 1.4, rec.z) end
+	local p = t / rec.fall
+	return Vector3.new(rec.x, 80 - 78.6 * p * p, rec.z)
+end
+local function runTaco()
+	tacoLive = true
+	R:SetAttribute("TacoLive", true)
+	R:SetAttribute("TacoEnd", workspace:GetServerTimeNow() + EV.TacoDuration)
+	rBanner:FireAllClients("TACO EVENT STARTED!", Color3.fromRGB(255, 200, 60), 5)
+	rSfx:FireAllClients("taco")
+	local list, counts, nextId, acc = {}, {}, 0, 0
+	local t0 = os.clock()
+	while os.clock() - t0 < EV.TacoDuration do
+		local dt = task.wait(0.15)
+		local now = workspace:GetServerTimeNow()
+		acc = acc + dt * EV.TacoRate
+		while acc >= 1 do
+			acc = acc - 1
+			local center, half = eventArea()
+			nextId = nextId + 1
+			local rec = {
+				id = nextId,
+				x = center.X + (math.random() * 2 - 1) * half,
+				z = center.Z + (math.random() * 2 - 1) * half,
+				fall = 2.2 + math.random() * 1.1,
+				born = now + 0.2,
+				taken = false,
+			}
+			list[#list + 1] = rec
+			rTaco:FireAllClients("spawn", rec.id, rec.x, rec.z, rec.fall, rec.born)
+		end
+		for i = #list, 1, -1 do
+			local rec = list[i]
+			if rec.taken or now - rec.born > rec.fall + 9 then
+				table.remove(list, i)
+			elseif now - rec.born > rec.fall * 0.7 then
+				local pos = tacoPos(rec, now)
+				for _, p in ipairs(Players:GetPlayers()) do
+					local ch = p.Character
+					local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+					local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+					if hum and hum.Health > 0 and hrp and (counts[p] or 0) < EV.TacoMaxPerPlayer then
+						local dx, dz = hrp.Position.X - rec.x, hrp.Position.Z - rec.z
+						if dx * dx + dz * dz < 20 and hrp.Position.Y < pos.Y + 6 and hrp.Position.Y > pos.Y - 8 then
+							rec.taken = true
+							counts[p] = (counts[p] or 0) + 1
+							stat(p, "Coins", EV.TacoCoins)
+							rTaco:FireAllClients("take", rec.id)
+							rSfx:FireClient(p, "pick")
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+	tacoLive = false
+	R:SetAttribute("TacoLive", false)
+end
+task.spawn(function()
+	while true do
+		local at = workspace:GetServerTimeNow() + EV.TacoInterval
+		R:SetAttribute("TacoAt", at)
+		R:SetAttribute("TacoLive", false)
+		while workspace:GetServerTimeNow() < at do task.wait(0.5) end
+		runTaco() -- ao terminar, o laco recomeca a contagem de 10 minutos
+	end
+end)
+
+-- ===== NATAL =====
+local xmasFolder, lobbyXmas, santaConn
+local saved = {}
+local function snowColor(c) return c:Lerp(Color3.new(1, 1, 1), 0.82) end
+local function recolor(p)
+	saved[p] = p.Color
+	p.Color = snowColor(p.Color)
+end
+
+local function xtree(parent, origin, x, z, scale, lit)
+	local function XP(nm, size, off, col, mat) return P(parent, nm, size, CFrame.new(origin + off), col, mat) end
+	XP("XTrunk", Vector3.new(1.6 * scale, 2 * scale, 1.6 * scale), Vector3.new(x, scale, z), Color3.fromRGB(110, 75, 40))
+	local y = 2 * scale
+	for i, t in ipairs({ { 8, 3 }, { 6, 3 }, { 4, 3 }, { 2, 2.5 } }) do
+		local w, hh = t[1] * scale, t[2] * scale
+		XP("XTree", Vector3.new(w, hh, w), Vector3.new(x, y + hh / 2, z), Color3.fromRGB(18 + i * 8, 110 + i * 12, 50))
+		for k = 1, 2 do
+			local sgn = (k == 1) and 1 or -1
+			local b = XP("XLight", Vector3.new(0.7, 0.7, 0.7), Vector3.new(x + sgn * w / 2, y + hh * 0.55, z + sgn * ((i % 2 == 0) and w / 2 or -w / 2)), Color3.fromHSV((i * 0.23 + k * 0.4) % 1, 0.9, 1), Enum.Material.Neon)
+			b.CanCollide, b.CanTouch, b.CanQuery = false, false, false
+			CS:AddTag(b, "PBBulb")
+		end
+		y = y + hh
+	end
+	local star = XP("XStar", Vector3.new(1.6, 1.6, 1.6), Vector3.new(x, y + 0.8, z), Color3.fromRGB(255, 220, 80), Enum.Material.Neon)
+	star.CanCollide = false
+	if lit then
+		local l = Instance.new("PointLight")
+		l.Range, l.Brightness, l.Color, l.Shadows = 18, 1.4, Color3.fromRGB(255, 220, 140), false
+		l.Parent = star
+	end
+end
+
+local function gift(parent, origin, x, z, s, hue)
+	local col, rib = Color3.fromHSV(hue, 0.75, 1), Color3.fromHSV((hue + 0.5) % 1, 0.6, 1)
+	local at = origin + Vector3.new(x, s / 2, z)
+	P(parent, "Gift", Vector3.new(s, s, s), CFrame.new(at), col)
+	local r1 = P(parent, "Ribbon", Vector3.new(s + 0.1, s + 0.1, s * 0.25), CFrame.new(at), rib)
+	local r2 = P(parent, "Ribbon", Vector3.new(s * 0.25, s + 0.1, s + 0.1), CFrame.new(at), rib)
+	local bow = P(parent, "Bow", Vector3.new(s * 0.4, s * 0.25, s * 0.4), CFrame.new(origin + Vector3.new(x, s + s * 0.12, z)), rib, Enum.Material.Neon)
+	r1.CanCollide, r2.CanCollide, bow.CanCollide = false, false, false
+end
+
+local function makeSanta(parent)
+	local V = Vector3.new
+	local m = Instance.new("Model")
+	m.Name = "Santa"
+	m.Parent = parent
+	local rig = {}
+	local function sp(name, size, x, y, z, col, pvt, anim, mat)
+		local p = Instance.new("Part")
+		p.Name, p.Size, p.Color, p.Material, p.Anchored, p.CanCollide = name, size, col, mat or PLASTIC, true, false
+		p.CanTouch, p.CanQuery = false, false
+		for _, f in ipairs(FACES) do p[f] = Enum.SurfaceType.Studs end
+		p.Parent = m
+		local rest = CFrame.new(x, y, z)
+		rig[#rig + 1] = { p = p, rest = rest, pvt = pvt and CFrame.new(pvt) or rest, anim = anim }
+		return p
+	end
+	local RED, WHITE, SKIN, BLACK = Color3.fromRGB(205, 30, 40), Color3.new(1, 1, 1), Color3.fromRGB(240, 190, 150), Color3.fromRGB(25, 25, 30)
+	local torso = sp("Torso", V(3.6, 3.8, 2.2), 0, 6.1, 0, RED)
+	sp("Belly", V(3.7, 1.6, 0.3), 0, 5.6, -1.2, WHITE)
+	sp("Belt", V(3.8, 0.6, 2.4), 0, 5, 0, BLACK)
+	sp("Buckle", V(1, 0.8, 0.2), 0, 5, -1.25, Color3.fromRGB(255, 205, 50), nil, nil, Enum.Material.Neon)
+	for _, s in ipairs({ -1, 1 }) do
+		local an = (s < 0) and "legL" or "legR"
+		local hip = V(1.0 * s, 4.2, 0)
+		sp("Pants", V(1.5, 2.6, 1.6), 1.0 * s, 2.9, 0, RED, hip, an)
+		sp("Boot", V(1.6, 1.1, 2.2), 1.0 * s, 0.55, -0.3, BLACK, hip, an)
+		local arm = (s < 0) and "armL" or "armR"
+		local sh = V(2.3 * s, 7.6, 0)
+		sp("Arm", V(1, 3, 1), 2.3 * s, 6.2, 0, RED, sh, arm)
+		sp("Mitten", V(1.1, 1, 1.1), 2.3 * s, 4.4, 0, WHITE, sh, arm)
+		sp("Eye", V(0.3, 0.3, 0.2), 0.5 * s, 9.3, -1.12, BLACK)
+	end
+	sp("Head", V(2.2, 2.2, 2.2), 0, 8.9, 0, SKIN)
+	sp("Beard", V(2.4, 1.6, 0.6), 0, 8.2, -1.2, WHITE)
+	sp("Mustache", V(1.8, 0.35, 0.4), 0, 8.9, -1.25, WHITE)
+	sp("Nose", V(0.45, 0.45, 0.35), 0, 8.8, -1.4, Color3.fromRGB(240, 150, 140))
+	sp("HatBrim", V(2.6, 0.6, 2.6), 0, 9.85, 0, WHITE)
+	sp("Hat", V(2.5, 1.8, 2.5), 0, 10.8, 0, RED)
+	sp("Pom", V(0.9, 0.9, 0.9), 0, 11.9, 0, WHITE)
+	sp("Sack", V(2.6, 2.8, 1.8), 0, 6.2, 1.9, Color3.fromRGB(150, 100, 55))
+	sp("SackGift", V(0.8, 0.8, 0.8), -0.6, 7.8, 1.9, Color3.fromRGB(60, 140, 230))
+	sp("SackGift", V(0.8, 0.8, 0.8), 0.6, 7.8, 1.9, Color3.fromRGB(80, 200, 100))
+	local bb = Instance.new("BillboardGui")
+	bb.Size, bb.StudsOffset, bb.AlwaysOnTop = UDim2.new(0, 200, 0, 40), Vector3.new(0, 7, 0), true
+	bb.Parent = torso
+	local say = Instance.new("TextLabel")
+	say.Size, say.BackgroundTransparency, say.Text, say.TextScaled = UDim2.new(1, 0, 1, 0), 1, "HO HO HO!", true
+	say.Font, say.TextColor3, say.TextStrokeTransparency = Enum.Font.FredokaOne, Color3.new(1, 1, 1), 0
+	say.Parent = bb
+	local function pose(root, t)
+		local ph = t * 5
+		local base = root * CFrame.new(0, math.abs(math.sin(ph)) * 0.25, 0)
+		for _, r in ipairs(rig) do
+			local rot, an = CFrame.new(), r.anim
+			if an == "legL" then rot = CFrame.Angles(math.sin(ph) * 0.5, 0, 0)
+			elseif an == "legR" then rot = CFrame.Angles(-math.sin(ph) * 0.5, 0, 0)
+			elseif an == "armL" then rot = CFrame.Angles(-math.sin(ph) * 0.5, 0, 0)
+			elseif an == "armR" then rot = CFrame.Angles(2.3 + math.sin(t * 6) * 0.45, 0, 0) end
+			r.p.CFrame = base * r.pvt * rot * r.pvt:Inverse() * r.rest
+		end
+	end
+	return m, pose, say
+end
+
+local function xmasOn()
+	if xmasActive or not parkArena then return end
+	xmasActive = true
+	local a = parkArena
+	R:SetAttribute("XmasActive", true)
+	xmasFolder = Instance.new("Folder")
+	xmasFolder.Name = "Christmas"
+	xmasFolder.Parent = a.Folder
+	local function XP(nm, size, off, col, mat, transp) return P(xmasFolder, nm, size, CFrame.new(a.Center + off), col, mat, transp) end
+	local function glow(p) p.CanCollide, p.CanTouch, p.CanQuery = false, false, false CS:AddTag(p, "PBBulb") return p end
+
+	-- neve no chao e nas construcoes
+	for _, p in ipairs(a.SnowGround) do recolor(p) end
+	for _, e in ipairs(a.SnowCaps) do
+		local cf, size, src
+		if typeof(e) == "table" then
+			cf, size = e.CF, e.Size
+		else
+			src = e
+			cf = e.CFrame * CFrame.new(0, e.Size.Y / 2 + 0.25, 0)
+			size = Vector3.new(e.Size.X + 0.2, 0.5, e.Size.Z + 0.2)
+		end
+		local c = P(xmasFolder, "Snow", size, cf, Color3.new(1, 1, 1))
+		c.CanCollide, c.CanTouch, c.CanQuery = false, false, false
+		if src and not src.Anchored then
+			c.Anchored, c.Massless = false, true
+			weld(src, c)
+		end
+	end
+	for _, p in ipairs(a.CenterDecor) do p.Parent = nil end
+
+	-- arvore gigante no centro (os andares sao escalaveis)
+	local widths = { 24, 19, 14, 9, 5 }
+	for i, w in ipairs(widths) do
+		XP("GiantTree", Vector3.new(w, 5, w), Vector3.new(0, (i - 1) * 5 + 2.5, 0), Color3.fromRGB(16 + i * 6, 105 + i * 10, 48))
+		local topY = i * 5 - 0.8
+		for _, s in ipairs({ -1, 1 }) do
+			for _, q in ipairs({ -0.25, 0.25 }) do
+				glow(XP("GiantLight", Vector3.new(0.8, 0.8, 0.8), Vector3.new(q * w, topY, s * (w / 2 + 0.2)), Color3.fromHSV((i * 0.17 + q) % 1, 0.9, 1), Enum.Material.Neon))
+				glow(XP("GiantLight", Vector3.new(0.8, 0.8, 0.8), Vector3.new(s * (w / 2 + 0.2), topY, q * w), Color3.fromHSV((i * 0.31 + q) % 1, 0.9, 1), Enum.Material.Neon))
+			end
+		end
+		for k, c in ipairs({ { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } }) do
+			XP("Ornament", Vector3.new(1.4, 1.4, 1.4), Vector3.new(c[1] * (w / 2 + 0.3), i * 5 - 2.5, c[2] * (w / 2 + 0.3)), ({ Color3.fromRGB(220, 40, 50), Color3.fromRGB(60, 110, 230), Color3.fromRGB(255, 205, 50), Color3.fromRGB(240, 240, 250) })[(k + i) % 4 + 1], Enum.Material.Metal).CanCollide = false
+		end
+	end
+	local star = XP("GiantStar", Vector3.new(3, 3, 3), Vector3.new(0, 26.5, 0), Color3.fromRGB(255, 220, 80), Enum.Material.Neon)
+	star.CanCollide = false
+	local sl = Instance.new("PointLight")
+	sl.Range, sl.Brightness, sl.Color, sl.Shadows = 45, 2, Color3.fromRGB(255, 220, 140), false
+	sl.Parent = star
+	for i = 0, 7 do
+		local ang = i / 8 * math.pi * 2
+		gift(xmasFolder, a.Center, math.cos(ang) * 17, math.sin(ang) * 17, 3.4, (i * 0.13) % 1)
+	end
+
+	-- arvores de Natal com luzes
+	for i, t in ipairs({ { 18, 12 }, { -18, 12 }, { 18, -12 }, { -18, -12 }, { 14, 44 }, { -14, 44 }, { 14, -44 }, { -14, -44 } }) do
+		xtree(xmasFolder, a.Center, t[1], t[2], 1.4, i <= 4)
+	end
+
+	-- presentes espalhados
+	local grng = Random.new(99)
+	local function blocked(x, z)
+		if x > -47 and x < -29 and z > -40 and z < 20 then return true end      -- roda-gigante
+		if x > 28 and x < 52 and z > -44 and z < -20 then return true end       -- tenda
+		if z > 48 or (math.abs(x) > 14 and math.abs(x) < 29 and z > 16 and z < 44) then return true end -- entrada e barracas
+		if x > 38 and x < 50 and z > 0 and z < 12 then return true end
+		if x * x + z * z < 22 * 22 then return true end                           -- arvore gigante
+		for _, s in ipairs(a.Spawns) do
+			local dx, dz = s.X - a.Center.X - x, s.Z - a.Center.Z - z
+			if dx * dx + dz * dz < 36 then return true end
+		end
+		return false
+	end
+	local placed, tries = 0, 0
+	while placed < 22 and tries < 300 do
+		tries = tries + 1
+		local x, z = grng:NextInteger(-54, 54), grng:NextInteger(-54, 54)
+		if not blocked(x, z) then
+			placed = placed + 1
+			gift(xmasFolder, a.Center, x, z, grng:NextNumber(2.2, 3.4), grng:NextNumber())
+		end
+	end
+
+	-- bonecos de neve
+	for _, s in ipairs({ { -26, -14 }, { 26, -14 }, { -26, 14 }, { 26, 14 } }) do
+		local x, z, W = s[1], s[2], Color3.new(1, 1, 1)
+		XP("SnowBase", Vector3.new(3.8, 3.8, 3.8), Vector3.new(x, 1.9, z), W)
+		XP("SnowMid", Vector3.new(2.8, 2.8, 2.8), Vector3.new(x, 5.2, z), W)
+		XP("SnowHead", Vector3.new(2, 2, 2), Vector3.new(x, 7.6, z), W)
+		XP("Scarf", Vector3.new(2.4, 0.6, 2.4), Vector3.new(x, 6.5, z), Color3.fromRGB(220, 40, 50))
+		XP("Carrot", Vector3.new(0.4, 0.4, 1.2), Vector3.new(x, 7.5, z - 1.5), Color3.fromRGB(255, 140, 30)).CanCollide = false
+		XP("HatBrim", Vector3.new(2.5, 0.3, 2.5), Vector3.new(x, 8.7, z), Color3.fromRGB(30, 30, 35))
+		XP("Hat", Vector3.new(1.7, 1.4, 1.7), Vector3.new(x, 9.5, z), Color3.fromRGB(30, 30, 35))
+		for _, ex in ipairs({ -0.5, 0.5 }) do XP("Eye", Vector3.new(0.3, 0.3, 0.2), Vector3.new(x + ex, 7.9, z - 1.05), Color3.fromRGB(20, 20, 20)).CanCollide = false end
+	end
+
+	-- lobby tambem fica nevado
+	lobbyXmas = Instance.new("Folder")
+	lobbyXmas.Name = "LobbyChristmas"
+	lobbyXmas.Parent = workspace
+	for _, p in ipairs(map:GetChildren()) do
+		if p:IsA("BasePart") and (p.Name == "Lawn" or p.Name == "Path" or p.Name == "Leaves") then recolor(p) end
+	end
+	for i, t in ipairs({ { 16, 28 }, { -16, 28 }, { 16, 52 }, { -16, 52 } }) do xtree(lobbyXmas, Vector3.new(0, 0, 0), t[1], t[2], 1.5, i <= 2) end
+
+	-- Papai Noel andando pela praca
+	local santa, pose, say = makeSanta(xmasFolder)
+	local t0 = os.clock()
+	santaConn = RunS.Heartbeat:Connect(function()
+		local t = os.clock() - t0
+		local ang = t * 0.3
+		local pos = a.Center + Vector3.new(math.cos(ang) * 17, 0, math.sin(ang) * 17)
+		pose(CFrame.lookAt(pos, pos + Vector3.new(-math.sin(ang), 0, math.cos(ang))), t)
+		say.Text = (math.floor(t / 5) % 2 == 0) and "HO HO HO!" or "MERRY CHRISTMAS!"
+	end)
+
+	if phase ~= "playing" then nextArena = parkArena end
+	setScene(currentArena)
+	rBanner:FireAllClients("MERRY CHRISTMAS!", Color3.fromRGB(255, 90, 90), 8)
+	rSfx:FireAllClients("xmas")
+end
+
+local function xmasOff()
+	if not xmasActive then return end
+	xmasActive = false
+	R:SetAttribute("XmasActive", false)
+	if santaConn then santaConn:Disconnect() santaConn = nil end
+	for p, c in pairs(saved) do
+		if p.Parent then p.Color = c end
+	end
+	table.clear(saved)
+	if xmasFolder then xmasFolder:Destroy() xmasFolder = nil end
+	if lobbyXmas then lobbyXmas:Destroy() lobbyXmas = nil end
+	if parkArena then
+		for _, p in ipairs(parkArena.CenterDecor) do p.Parent = parkArena.Folder end
+	end
+	setScene(currentArena)
+end
+
+local XMAS_AT = DateTime.fromUniversalTime(EV.ChristmasYear, EV.ChristmasMonth, EV.ChristmasDay, 0, 0, 0).UnixTimestamp - EV.UtcOffsetHours * 3600
+local XMAS_END = XMAS_AT + EV.ChristmasDuration
+if EV.TestChristmas then
+	XMAS_AT = os.time() + 20
+	XMAS_END = XMAS_AT + 180
+end
+R:SetAttribute("XmasAt", XMAS_AT)
+R:SetAttribute("XmasEnd", XMAS_END)
+R:SetAttribute("XmasActive", false)
+task.spawn(function()
+	while true do
+		local now = workspace:GetServerTimeNow()
+		if now >= XMAS_AT and now < XMAS_END then
+			if not xmasActive then xmasOn() end
+		elseif xmasActive then
+			xmasOff()
+		end
+		task.wait(1)
+	end
+end)
+
+-- ===== rodada =====
+local function chooseArena()
+	if xmasActive and parkArena then
+		nextArena = parkArena
+		return
+	end
+	if dinoArena and lastArena ~= dinoArena and math.random() < 0.25 then
+		nextArena = dinoArena
+		return
+	end
+	local pick
+	repeat pick = arenas[math.random(#arenas)] until pick ~= lastArena or #arenas == 1
+	nextArena = pick
+end
+chooseArena()
+
+local matchActive = false
+local botList = {}
+local botRequest = nil
+
+local function hasReal()
+	for e in pairs(alive) do if not isBot(e) then return true end end
+	return false
+end
+
+local function refreshSpeeds()
+	for e in pairs(alive) do
+		local hum = e.Character and e.Character:FindFirstChildOfClass("Humanoid")
+		if hum then
+			local bot = isBot(e)
+			local base = (e == holder) and (bot and CFG.BotHolderSpeed or CFG.HolderSpeed) or (bot and CFG.BotNormalSpeed or CFG.NormalSpeed)
+			local b = boost[e]
+			if b and os.clock() < b.Until then base = base * b.Mult end
+			if beachArena and currentArena == beachArena then
+				local hrp = e.Character:FindFirstChild("HumanoidRootPart")
+				if hrp and hrp.Position.Z - beachArena.Center.Z < -20 then base = base * 0.75 end -- agua rasa deixa lento
+			end
+			if hum.WalkSpeed ~= base then hum.WalkSpeed = base end
+		end
+	end
+end
+
+local function trexHit(pos)
+	local lp = trexRoot:PointToObjectSpace(pos)
+	return math.abs(lp.X) < 4 and lp.Z > -15 and lp.Z < 20 and lp.Y > -3 and lp.Y < 17
+end
+
+local function makeBot(i)
+	local desc = Instance.new("HumanoidDescription")
+	local col = Color3.fromHSV(math.random(), 0.5, 0.95)
+	for _, prop in ipairs({ "HeadColor", "TorsoColor", "LeftArmColor", "RightArmColor", "LeftLegColor", "RightLegColor" }) do desc[prop] = col end
+	local ok, model = pcall(function() return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15) end)
+	if not ok or not model then return nil end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum then model:Destroy() return nil end
+	model.Name = "Bot" .. i
+	hum.DisplayName = "Bot " .. i
+	hum.WalkSpeed = CFG.BotNormalSpeed
+	model.Parent = workspace
+	local bot = { Character = model, DisplayName = "Bot " .. i, Name = "Bot" .. i, Parent = Players, Skin = CF.Skins[math.random(#CF.Skins)].Id, SetAttribute = function() end }
+	botByModel[model] = bot
+	return bot
+end
+
+local function clampTo(a, v)
+	return Vector3.new(a.Center.X + math.clamp(v.X - a.Center.X, -50, 50), v.Y, a.Center.Z + math.clamp(v.Z - a.Center.Z, -50, 50))
+end
+
+-- IA simples: quem esta com a bomba persegue o mais proximo, os outros fogem do portador
+local function botAI(a)
+	while matchActive do
+		for _, e in ipairs(botList) do
+			if alive[e] and okChar(e) then
+				local hum = e.Character:FindFirstChildOfClass("Humanoid")
+				local hrp = e.Character.HumanoidRootPart
+				local pos = hrp.Position
+				if e == holder then
+					local best, bd = nil, 1e9
+					for o in pairs(alive) do
+						if o ~= e and okChar(o) then
+							local d = (o.Character.HumanoidRootPart.Position - pos).Magnitude
+							if d < bd then best, bd = o, d end
+						end
+					end
+					if best then hum:MoveTo(best.Character.HumanoidRootPart.Position) end
+				elseif holder and okChar(holder) then
+					local away = pos - holder.Character.HumanoidRootPart.Position
+					away = Vector3.new(away.X, 0, away.Z)
+					if away.Magnitude < 28 and away.Magnitude > 0.1 then
+						hum:MoveTo(clampTo(a, pos + away.Unit * 20))
+					elseif math.random() < 0.25 then
+						hum:MoveTo(clampTo(a, pos + Vector3.new(math.random(-15, 15), 0, math.random(-15, 15))))
+					end
+				end
+				if e.LastPos and (pos - e.LastPos).Magnitude < 0.5 then
+					e.Stuck = (e.Stuck or 0) + 1
+					if e.Stuck >= 3 then
+						hum.Jump = true
+						e.Stuck = 0
+					end
+				else
+					e.Stuck = 0
+				end
+				e.LastPos = pos
+			end
+		end
+		task.wait(0.3)
+	end
+end
+
+local function runMatch(a, participants, botMode)
+	currentArena = a
+	if not botMode then lastArena = a end
+	alive = {}
+	table.clear(boost)
+	matchActive = true
+	setScene(a)
+	for i, p in ipairs(participants) do
+		alive[p] = true
+		local pos = a.Spawns[((i - 1) % #a.Spawns) + 1]
+		p.Character:PivotTo(CFrame.lookAt(pos, a.Center + Vector3.new(0, 4, 0)))
+	end
+	phase = "playing"
+	msg("Arena: " .. a.Name, Color3.fromRGB(140, 220, 255))
+	if a == dinoArena then
+		task.delay(1.5, function() msg("EVENTO DINO WORLD! Cuidado com o T-Rex! Moedas em dobro!", Color3.fromRGB(255, 190, 60)) end)
+	end
+	if a == beachArena then
+		task.delay(1.5, function() msg("Praia de Copacabana: a agua NAO mata, mas te deixa mais lento!", Color3.fromRGB(120, 210, 255)) end)
+	end
+	for t = 3, 1, -1 do
+		status = "Preparar... " .. t
+		push()
+		task.wait(1)
+	end
+	dinoActive = (a == dinoArena)
+	if dinoActive and trexReset then trexReset() end
+	if botMode then task.spawn(botAI, a) end
+	local cycle = 0
+	while count() > 1 and (not botMode or hasReal()) do
+		cycle = cycle + 1
+		local list = aliveList()
+		if #list < 2 then break end
+		bombTotal = math.max(8, math.random(CFG.BombMin, CFG.BombMax) - (cycle - 1) * 2)
+		bombEnd = os.clock() + bombTotal
+		status = "Fuja da bomba!"
+		giveBomb(list[math.random(#list)])
+		msg("A bomba esta com " .. holder.DisplayName .. "!", Color3.fromRGB(255, 200, 80))
+		while os.clock() < bombEnd and count() > 1 and (not botMode or hasReal()) do
+			task.wait(0.1)
+			refreshSpeeds()
+			for p in pairs(alive) do
+				local hrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+				if not okChar(p) or p.Parent ~= Players then
+					alive[p] = nil
+				elseif hrp and hrp.Position.Y < -12 then
+					eliminate(p, " caiu!")
+				elseif dinoActive and hrp and trexHit(hrp.Position) then
+					eliminate(p, " foi pisoteado pelo T-Rex!")
+				end
+			end
+			if count() > 1 and (not holder or not alive[holder]) then
+				local l = aliveList()
+				if #l > 0 then giveBomb(l[math.random(#l)]) end
+			end
+		end
+		if count() <= 1 or (botMode and not hasReal()) then break end
+		explode(holder)
+		task.wait(2.5)
+	end
+	clearBomb()
+	matchActive = false
+	dinoActive = false
+	phase = "ended"
+	local w = aliveList()[1]
+	if botMode and not hasReal() then w = nil end
+	local winC = botMode and CFG.BotWinCoins or CFG.WinCoins
+	local playC = botMode and CFG.BotPlayCoins or CFG.PlayCoins
+	if a == dinoArena then winC, playC = winC * 2, playC * 2 end
+	for _, p in ipairs(participants) do stat(p, "Coins", playC) end
+	if w then
+		if not botMode then stat(w, "Wins", 1) end
+		stat(w, "Coins", winC)
+		status = w.DisplayName .. " venceu!"
+		msg(w.DisplayName .. " VENCEU!" .. (isBot(w) and "" or (" +" .. winC .. " moedas")), Color3.fromRGB(120, 255, 140))
+	elseif botMode then
+		status = "Os bots venceram!"
+	else
+		status = "Ninguem sobreviveu!"
+	end
+	alive = {}
+	currentArena = nil
+	if not botMode then chooseArena() end
+	push()
+	task.wait(5)
+	setScene(nil)
+	for _, p in ipairs(participants) do
+		if isBot(p) then
+			botByModel[p.Character] = nil
+			p.Character:Destroy()
+		elseif p.Parent == Players then
+			p:LoadCharacter()
+		end
+	end
+	task.wait(2)
+end
+
+local function playRound()
+	local participants = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if okChar(p) then participants[#participants + 1] = p end
+	end
+	if #participants < CFG.MinPlayers then return end
+	runMatch(nextArena, participants, false)
+end
+
+local function playBotRound(p, n)
+	local ents = { p }
+	botList = {}
+	for i = 1, n do
+		local b = makeBot(i)
+		if b then
+			ents[#ents + 1] = b
+			botList[#botList + 1] = b
+		end
+	end
+	if #botList == 0 then
+		rMsg:FireClient(p, "Nao foi possivel criar os bots", Color3.fromRGB(255, 120, 100))
+		return
+	end
+	runMatch(botArena, ents, true)
+	botList = {}
+end
+
+rBotAct.OnServerEvent:Connect(function(p, action, n)
+	if action == "cancel" then
+		if botRequest and botRequest.Player == p then
+			botRequest = nil
+			rMsg:FireClient(p, "Fila de bots cancelada", Color3.fromRGB(255, 220, 120))
+		end
+		return
+	end
+	if action ~= "start" or (n ~= 3 and n ~= 5 and n ~= 7) then return end
+	if not okChar(p) or alive[p] then return end
+	botRequest = { Player = p, N = n }
+	if phase == "playing" or phase == "ended" then
+		rMsg:FireClient(p, "Na fila: a partida com bots comeca quando a rodada atual acabar", Color3.fromRGB(255, 220, 120))
+	else
+		rMsg:FireClient(p, "Preparando partida com " .. n .. " bots...", Color3.fromRGB(140, 220, 255))
+	end
+end)
+
+task.spawn(function()
+	while true do
+		if botRequest then
+			local req = botRequest
+			botRequest = nil
+			if req.Player.Parent == Players and okChar(req.Player) then playBotRound(req.Player, req.N) end
+		else
+			phase = "waiting"
+			while #Players:GetPlayers() < CFG.MinPlayers and not botRequest do
+				status = "Esperando jogadores (" .. #Players:GetPlayers() .. "/" .. CFG.MinPlayers .. ")"
+				push()
+				task.wait(1)
+			end
+			local aborted = botRequest ~= nil
+			if not aborted then
+				for t = CFG.Intermission, 1, -1 do
+					if #Players:GetPlayers() < CFG.MinPlayers or botRequest then aborted = true break end
+					phase, status = "intermission", "Rodada comeca em " .. t .. "s"
+					push()
+					task.wait(1)
+				end
+			end
+			if not aborted then playRound() end
+		end
+		task.wait()
+	end
+end)
+]]></ProtectedString></Properties><Item class="LocalScript" referent="RBX3"><Properties><string name="Name">PBClient</string><ProtectedString name="Source"><![CDATA[-- PBClient (LocalScript) | vai para StarterPlayerScripts automaticamente
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunS = game:GetService("RunService")
+local TS = game:GetService("TweenService")
+local PPS = game:GetService("ProximityPromptService")
+local CS = game:GetService("CollectionService")
+
+local lp = Players.LocalPlayer
+local R = RS:WaitForChild("PB")
+local CF = require(RS:WaitForChild("PBConfig"))
+local rState, rMsg, rSkinState, rSkinAct, rOpenUI, rBotAct = R:WaitForChild("State"), R:WaitForChild("Msg"), R:WaitForChild("SkinState"), R:WaitForChild("SkinAct"), R:WaitForChild("OpenUI"), R:WaitForChild("BotAct")
+
+local gui = Instance.new("ScreenGui")
+gui.Name, gui.ResetOnSpawn, gui.IgnoreGuiInset = "PBUI", false, true
+gui.Parent = lp:WaitForChild("PlayerGui")
+
+-- paleta estilo Grow a Garden
+local CREAM, BROWN, GREEN, DKGREEN, ORANGE, YELLOW = Color3.fromRGB(255, 246, 220), Color3.fromRGB(80, 52, 28), Color3.fromRGB(110, 200, 80), Color3.fromRGB(70, 150, 55), Color3.fromRGB(255, 150, 40), Color3.fromRGB(255, 205, 50)
+local FONT = Enum.Font.FredokaOne
+local function mk(cls, props, parent)
+	local o = Instance.new(cls)
+	for k, v in pairs(props) do o[k] = v end
+	o.Parent = parent
+	return o
+end
+local function round(o, r) mk("UICorner", { CornerRadius = UDim.new(0, r or 10) }, o) end
+local function label(parent, text, size, pos, color, align)
+	return mk("TextLabel", { Text = text, Size = size, Position = pos, BackgroundTransparency = 1, TextColor3 = color or BROWN, Font = FONT, TextScaled = true, TextXAlignment = align or Enum.TextXAlignment.Left }, parent)
+end
+local function button(parent, text, size, pos, color)
+	local b = mk("TextButton", { Text = text, Size = size, Position = pos, BackgroundColor3 = color or GREEN, TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.5, Font = FONT, TextScaled = true }, parent)
+	round(b, 8)
+	mk("UIStroke", { Color = Color3.fromRGB(40, 90, 30), Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b)
+	return b
+end
+
+-- textura de studs (bolinhas em grade) para icones e botoes
+local function studTex(parent, w, h, step, dot, transp)
+	for x = step / 2, w - 1, step do
+		for y = step / 2, h - 1, step do
+			local d = mk("Frame", { Size = UDim2.new(0, dot, 0, dot), Position = UDim2.new(0, x - dot / 2, 0, y - dot / 2), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = transp or 0.55, BorderSizePixel = 0 }, parent)
+			round(d, dot)
+		end
+	end
+end
+-- icone "tijolo" com studs: quadrado pequeno + 2 studs em cima
+local function brick(parent, pos, size, color, symbol)
+	local f = mk("Frame", { Size = UDim2.new(0, size, 0, size), Position = pos, BackgroundColor3 = color }, parent)
+	round(f, 5)
+	mk("UIStroke", { Color = Color3.fromRGB(60, 40, 20), Thickness = 1.5 }, f)
+	studTex(f, size, size, size / 3, 3, 0.6)
+	if symbol then
+		mk("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = symbol, TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.3, Font = FONT, TextScaled = true }, f)
+	end
+	return f
+end
+
+-- ===== HUD pequeno de dinheiro e vitorias =====
+local function pill(y, symbol, symColor)
+	local f = mk("Frame", { Size = UDim2.new(0, 132, 0, 32), Position = UDim2.new(0, 10, 0, y), BackgroundColor3 = CREAM }, gui)
+	round(f, 16)
+	mk("UIStroke", { Color = DKGREEN, Thickness = 2 }, f)
+	brick(f, UDim2.new(0, 4, 0, 4), 24, symColor, symbol)
+	local n = mk("TextLabel", { Size = UDim2.new(1, -40, 1, -8), Position = UDim2.new(0, 34, 0, 4), BackgroundTransparency = 1, TextColor3 = BROWN, Font = FONT, TextScaled = true, Text = "0", TextXAlignment = Enum.TextXAlignment.Left }, f)
+	local sc = mk("UIScale", { Scale = 1 }, f)
+	return n, sc
+end
+local coinN, coinSc = pill(10, "$", YELLOW)
+local winN, winSc = pill(46, "W", ORANGE)
+local function bump(sc)
+	sc.Scale = 1.12
+	TS:Create(sc, TweenInfo.new(0.25, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+end
+local function coinsNow()
+	local ls = lp:FindFirstChild("leaderstats")
+	local c = ls and ls:FindFirstChild("Coins")
+	return c and c.Value or 0
+end
+local renderSkins, renderCoins, skinsF, coinsF, botsF, chefF, renderChef
+task.spawn(function()
+	local ls = lp:WaitForChild("leaderstats")
+	local c, w = ls:WaitForChild("Coins"), ls:WaitForChild("Wins")
+	coinN.Text, winN.Text = tostring(c.Value), tostring(w.Value)
+	c.Changed:Connect(function()
+		coinN.Text = tostring(c.Value)
+		bump(coinSc)
+		if skinsF and skinsF.Visible then renderSkins() end
+	end)
+	w.Changed:Connect(function()
+		winN.Text = tostring(w.Value)
+		bump(winSc)
+	end)
+end)
+
+-- ===== alerta, painel superior, mensagens =====
+local danger = mk("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(255, 30, 20), BackgroundTransparency = 1, Visible = false }, gui)
+local dangerText = mk("TextLabel", { Size = UDim2.new(0, 560, 0, 70), Position = UDim2.new(0.5, -280, 0.64, 0), BackgroundTransparency = 1, Text = "VOCE ESTA COM A BOMBA!\nTOQUE EM ALGUEM!", TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = FONT, TextScaled = true, Visible = false }, gui)
+
+local top = mk("Frame", { Size = UDim2.new(0, 420, 0, 84), Position = UDim2.new(0.5, -210, 0, 10), BackgroundColor3 = CREAM }, gui)
+round(top, 14)
+mk("UIStroke", { Color = DKGREEN, Thickness = 3 }, top)
+local statusLbl = mk("TextLabel", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 0, 5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(230, 110, 20), Font = FONT, TextScaled = true, Text = "..." }, top)
+local subLbl = mk("TextLabel", { Size = UDim2.new(1, -20, 0, 22), Position = UDim2.new(0, 10, 0, 46), BackgroundTransparency = 1, TextColor3 = BROWN, Font = FONT, TextScaled = true, Text = "" }, top)
+local arenaLbl = mk("TextLabel", { Size = UDim2.new(1, -20, 0, 16), Position = UDim2.new(0, 10, 0, 67), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(40, 120, 190), Font = FONT, TextScaled = true, Text = "" }, top)
+
+local msgLbl = mk("TextLabel", { Size = UDim2.new(0, 640, 0, 48), Position = UDim2.new(0.5, -320, 0.22, 0), BackgroundTransparency = 1, TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 1, TextTransparency = 1, Font = FONT, TextScaled = true, Text = "" }, gui)
+local msgId = 0
+rMsg.OnClientEvent:Connect(function(text, color)
+	msgId = msgId + 1
+	local id = msgId
+	msgLbl.Text, msgLbl.TextColor3, msgLbl.TextTransparency, msgLbl.TextStrokeTransparency = text, color or Color3.new(1, 1, 1), 0, 0
+	task.delay(2.5, function()
+		if id == msgId then TS:Create(msgLbl, TweenInfo.new(0.6), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play() end
+	end)
+end)
+
+local bombEndT = 0
+rState.OnClientEvent:Connect(function(s)
+	bombEndT = s.BombEnd or 0
+	statusLbl.Text = s.Text
+	if s.Phase == "playing" then
+		subLbl.Text = "Vivos: " .. s.Alive .. (s.Holder ~= "" and ("   |   Bomba: " .. s.Holder) or "")
+		arenaLbl.Text = "Arena: " .. s.Arena
+	else
+		subLbl.Text = (s.Phase == "ended") and "" or "Passe a bomba tocando nos outros!"
+		arenaLbl.Text = s.Arena ~= "" and ("Proxima arena: " .. s.Arena) or ""
+	end
+end)
+
+local function refreshDanger()
+	local has = lp:GetAttribute("HasBomb") == true
+	danger.Visible, dangerText.Visible = has, has
+end
+lp:GetAttributeChangedSignal("HasBomb"):Connect(refreshDanger)
+refreshDanger()
+RunS.RenderStepped:Connect(function()
+	if danger.Visible then
+		danger.BackgroundTransparency = 0.82 - 0.12 * math.abs(math.sin(os.clock() * 6))
+		dangerText.Rotation = math.sin(os.clock() * 12) * 2
+	end
+end)
+
+-- ===== prompt pequeno (substitui o botao gigante padrao) =====
+PPS.PromptShown:Connect(function(prompt)
+	if prompt.Style == Enum.ProximityPromptStyle.Default then return end
+	local bb = mk("BillboardGui", { Size = UDim2.new(0, 150, 0, 30), StudsOffset = Vector3.new(0, 4, 0), AlwaysOnTop = true, Adornee = prompt.Parent }, lp.PlayerGui)
+	local b = mk("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = CREAM, Text = "", AutoButtonColor = false }, bb)
+	round(b, 15)
+	mk("UIStroke", { Color = DKGREEN, Thickness = 2 }, b)
+	local key = brick(b, UDim2.new(0, 3, 0, 3), 24, GREEN, prompt.KeyboardKeyCode == Enum.KeyCode.E and "E" or "!")
+	mk("TextLabel", { Size = UDim2.new(1, -36, 1, -8), Position = UDim2.new(0, 32, 0, 4), BackgroundTransparency = 1, Text = prompt.ActionText, TextColor3 = BROWN, Font = FONT, TextScaled = true, TextXAlignment = Enum.TextXAlignment.Left }, b)
+	b.Activated:Connect(function()
+		prompt:InputHoldBegin()
+		task.wait()
+		prompt:InputHoldEnd()
+	end)
+	prompt.PromptHidden:Connect(function() bb:Destroy() end)
+end)
+
+-- ===== paineis (estilo jardim) =====
+local function panel(title, strokeColor)
+	local f = mk("Frame", { Size = UDim2.new(0, 520, 0, 420), Position = UDim2.new(0.5, -260, 0.5, -210), BackgroundColor3 = CREAM, Visible = false }, gui)
+	round(f, 16)
+	mk("UIStroke", { Color = strokeColor, Thickness = 4 }, f)
+	local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = strokeColor }, f)
+	round(head, 16)
+	label(head, title, UDim2.new(0, 360, 0, 34), UDim2.new(0, 16, 0, 6), Color3.new(1, 1, 1))
+	local x = button(f, "X", UDim2.new(0, 32, 0, 32), UDim2.new(1, -40, 0, 7), Color3.fromRGB(225, 80, 70))
+	x.MouseButton1Click:Connect(function() f.Visible = false end)
+	local list = mk("ScrollingFrame", { Size = UDim2.new(1, -24, 1, -60), Position = UDim2.new(0, 12, 0, 54), BackgroundTransparency = 1, ScrollBarThickness = 6, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y }, f)
+	mk("UIListLayout", { Padding = UDim.new(0, 8) }, list)
+	return f, list
+end
+
+-- skins
+local owned, equipped, burgers = { classic = true }, "classic", 0
+local skinsList
+skinsF, skinsList = panel("Skins de Bomba", Color3.fromRGB(160, 100, 215))
+renderSkins = function()
+	for _, c in ipairs(skinsList:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
+	for _, s in ipairs(CF.Skins) do
+		local row = mk("Frame", { Size = UDim2.new(1, -8, 0, 58), BackgroundColor3 = Color3.fromRGB(255, 232, 180) }, skinsList)
+		round(row, 10)
+		local sw = brick(row, UDim2.new(0, 10, 0, 9), 40, s.Base)
+		mk("UIStroke", { Color = s.Flash, Thickness = 3 }, sw)
+		label(row, s.Name, UDim2.new(0, 190, 0, 24), UDim2.new(0, 60, 0, 7))
+		local sub = owned[s.Id] and "Voce tem" or (s.Free and "Gratis com a capivara no lobby!" or "Bloqueada")
+		label(row, sub, UDim2.new(0, 220, 0, 16), UDim2.new(0, 60, 0, 34), Color3.fromRGB(140, 100, 60))
+		if owned[s.Id] then
+			local on = equipped == s.Id
+			local b = button(row, on and "Equipada" or "Equipar", UDim2.new(0, 110, 0, 32), UDim2.new(1, -120, 0, 13), on and Color3.fromRGB(150, 140, 125) or GREEN)
+			b.MouseButton1Click:Connect(function() if not on then rSkinAct:FireServer("equip", s.Id) end end)
+		else
+			if s.Coins then
+				local can = coinsNow() >= s.Coins
+				local b = button(row, "$ " .. s.Coins, UDim2.new(0, 100, 0, s.Robux and 24 or 32), UDim2.new(1, -110, 0, s.Robux and 5 or 13), can and ORANGE or Color3.fromRGB(150, 140, 125))
+				b.MouseButton1Click:Connect(function() rSkinAct:FireServer("coins", s.Id) end)
+			end
+			if s.Robux then
+				local b = button(row, "R$ " .. s.Robux, UDim2.new(0, 100, 0, s.Coins and 24 or 32), UDim2.new(1, -110, 0, s.Coins and 30 or 13), Color3.fromRGB(60, 190, 110))
+				b.MouseButton1Click:Connect(function() rSkinAct:FireServer("robux", s.Id) end)
+			end
+		end
+	end
+end
+rSkinState.OnClientEvent:Connect(function(s)
+	owned, equipped, burgers = s.Owned, s.Equipped, s.Burgers or 0
+	if skinsF.Visible then renderSkins() end
+	if chefF and chefF.Visible then renderChef() end
+end)
+
+-- moedas (Robux)
+local coinsList
+coinsF, coinsList = panel("Loja de Moedas", Color3.fromRGB(230, 170, 30))
+renderCoins = function()
+	for _, c in ipairs(coinsList:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
+	for _, k in ipairs(CF.CoinPacks) do
+		local row = mk("Frame", { Size = UDim2.new(1, -8, 0, 64), BackgroundColor3 = Color3.fromRGB(255, 232, 180) }, coinsList)
+		round(row, 10)
+		brick(row, UDim2.new(0, 10, 0, 12), 40, YELLOW, "$")
+		label(row, k.Name, UDim2.new(0, 230, 0, 26), UDim2.new(0, 60, 0, 8))
+		label(row, "+" .. k.Coins .. " moedas", UDim2.new(0, 200, 0, 18), UDim2.new(0, 60, 0, 36), Color3.fromRGB(140, 100, 60))
+		local b = button(row, "R$ " .. k.Robux, UDim2.new(0, 110, 0, 36), UDim2.new(1, -120, 0, 14), Color3.fromRGB(60, 190, 110))
+		b.MouseButton1Click:Connect(function() rSkinAct:FireServer("pack", k.Id) end)
+	end
+end
+
+-- partida com bots
+local botsList
+botsF, botsList = panel("Partida com Bots", Color3.fromRGB(70, 170, 90))
+do
+	mk("TextLabel", { Size = UDim2.new(1, -8, 0, 60), BackgroundTransparency = 1, TextColor3 = BROWN, Font = FONT, TextScaled = true, TextWrapped = true, Text = "Uma partida so sua, numa arena propria, contra bots. Da poucas moedas e nao conta vitoria." }, botsList)
+	for _, n in ipairs({ 3, 5, 7 }) do
+		local row = mk("Frame", { Size = UDim2.new(1, -8, 0, 58), BackgroundColor3 = Color3.fromRGB(255, 232, 180) }, botsList)
+		round(row, 10)
+		brick(row, UDim2.new(0, 10, 0, 9), 40, GREEN, tostring(n))
+		label(row, "Contra " .. n .. " bots", UDim2.new(0, 240, 0, 28), UDim2.new(0, 60, 0, 15))
+		local b = button(row, "Jogar", UDim2.new(0, 110, 0, 34), UDim2.new(1, -120, 0, 12), GREEN)
+		b.MouseButton1Click:Connect(function()
+			rBotAct:FireServer("start", n)
+			botsF.Visible = false
+		end)
+	end
+	local cancel = button(botsList, "Cancelar fila", UDim2.new(1, -8, 0, 36), UDim2.new(), Color3.fromRGB(225, 100, 80))
+	cancel.MouseButton1Click:Connect(function() rBotAct:FireServer("cancel") end)
+end
+
+-- chef (hamburguer)
+local chefList
+chefF, chefList = panel("Chef Pierre - Hamburgueria", Color3.fromRGB(215, 90, 50))
+renderChef = function()
+	for _, ch in ipairs(chefList:GetChildren()) do if ch:IsA("Frame") then ch:Destroy() end end
+	local function row(title, sub, btnText, btnColor, action, symbol)
+		local r = mk("Frame", { Size = UDim2.new(1, -8, 0, 64), BackgroundColor3 = Color3.fromRGB(255, 232, 180) }, chefList)
+		round(r, 10)
+		brick(r, UDim2.new(0, 10, 0, 12), 40, Color3.fromRGB(215, 150, 70), symbol)
+		label(r, title, UDim2.new(0, 250, 0, 26), UDim2.new(0, 60, 0, 8))
+		label(r, sub, UDim2.new(0, 250, 0, 18), UDim2.new(0, 60, 0, 36), Color3.fromRGB(140, 100, 60))
+		local b = button(r, btnText, UDim2.new(0, 110, 0, 36), UDim2.new(1, -120, 0, 14), btnColor)
+		b.MouseButton1Click:Connect(function() rSkinAct:FireServer(action) end)
+	end
+	row("Hamburguer", "Velocidade extra por 8s (so na partida)", "$ 30", ORANGE, "burger", "H")
+	row("Duplo (voce tem " .. burgers .. ")", "Super velocidade por 12s", "Comer", GREEN, "eatduplo", "2x")
+	row(CF.BurgerPack.Name, "+" .. CF.BurgerPack.Count .. " hamburgueres duplos", "R$ " .. CF.BurgerPack.Robux, Color3.fromRGB(60, 190, 110), "buyduplo", "R$")
+end
+
+-- botoes laterais pequenos (com studs) + abrir pelas barracas
+local function sideBtn(text, y, color)
+	local b = button(gui, text, UDim2.new(0, 84, 0, 28), UDim2.new(0, 10, 0, y), color)
+	studTex(b, 84, 28, 10, 3, 0.75)
+	return b
+end
+local skinBtn = sideBtn("Skins", 90, Color3.fromRGB(160, 100, 215))
+local coinBtn = sideBtn("Moedas", 124, ORANGE)
+local botBtn = sideBtn("Bots", 158, GREEN)
+local frames = { skins = skinsF, coins = coinsF, bots = botsF, chef = chefF }
+local function open(which)
+	for name, f in pairs(frames) do
+		f.Visible = (name == which) and not f.Visible
+	end
+	if skinsF.Visible then renderSkins() end
+	if coinsF.Visible then renderCoins() end
+	if chefF.Visible then renderChef() end
+end
+skinBtn.MouseButton1Click:Connect(function() open("skins") end)
+coinBtn.MouseButton1Click:Connect(function() open("coins") end)
+botBtn.MouseButton1Click:Connect(function() open("bots") end)
+rOpenUI.OnClientEvent:Connect(function(which)
+	for _, f in pairs(frames) do f.Visible = false end
+	open(which)
+end)
+
+-- ===== mini contador da bomba =====
+local timerPill = mk("Frame", { Size = UDim2.new(0, 150, 0, 28), Position = UDim2.new(0.5, -75, 0, 98), BackgroundColor3 = CREAM, Visible = false }, gui)
+round(timerPill, 14)
+mk("UIStroke", { Color = Color3.fromRGB(220, 70, 50), Thickness = 2 }, timerPill)
+brick(timerPill, UDim2.new(0, 3, 0, 3), 22, Color3.fromRGB(40, 40, 50), "!")
+local timerLbl = mk("TextLabel", { Size = UDim2.new(1, -34, 1, -6), Position = UDim2.new(0, 30, 0, 3), BackgroundTransparency = 1, TextColor3 = BROWN, Font = FONT, TextScaled = true, Text = "", TextXAlignment = Enum.TextXAlignment.Left }, timerPill)
+RunS.RenderStepped:Connect(function()
+	local now = workspace:GetServerTimeNow()
+	for _, b in ipairs(CS:GetTagged("PBBomb")) do
+		local bb = b:FindFirstChildOfClass("BillboardGui")
+		local t = bb and bb:FindFirstChild("T")
+		local endT = b:GetAttribute("EndT")
+		if t and endT then
+			local left = math.max(0, endT - now)
+			t.Text = string.format("%.1f", left)
+			t.TextColor3 = (left < 3) and Color3.fromRGB(255, 90, 80) or Color3.new(1, 1, 1)
+		end
+	end
+	local left = bombEndT - now
+	if bombEndT > 0 and left > 0 then
+		timerPill.Visible = true
+		timerLbl.Text = "Explode em " .. string.format("%.1f", left) .. "s"
+		timerLbl.TextColor3 = (left < 3) and Color3.fromRGB(230, 60, 40) or BROWN
+	else
+		timerPill.Visible = false
+	end
+end)
+
+-- ===== EVENTOS: Taco Event, contagem de Natal, neve, musica =====
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+local EV = CF.Events
+local rBanner, rSfx, rTaco = R:WaitForChild("Banner"), R:WaitForChild("Sfx"), R:WaitForChild("Taco")
+
+-- banner grande no centro
+local bannerLbl = mk("TextLabel", { Size = UDim2.new(0, 820, 0, 100), Position = UDim2.new(0.5, -410, 0.28, 0), BackgroundTransparency = 1, TextColor3 = Color3.new(1, 1, 1), TextStrokeColor3 = Color3.fromRGB(40, 20, 20), TextStrokeTransparency = 1, TextTransparency = 1, Font = FONT, TextScaled = true, Text = "" }, gui)
+local bannerScale = mk("UIScale", { Scale = 1 }, bannerLbl)
+local bannerId = 0
+local function showBanner(text, color, secs)
+	bannerId = bannerId + 1
+	local id = bannerId
+	bannerLbl.Text, bannerLbl.TextColor3 = text, color or Color3.new(1, 1, 1)
+	bannerLbl.TextTransparency, bannerLbl.TextStrokeTransparency = 0, 0
+	bannerScale.Scale = 0.6
+	TS:Create(bannerScale, TweenInfo.new(0.45, Enum.EasingStyle.Back), { Scale = 1 }):Play()
+	task.delay(secs or 5, function()
+		if id == bannerId then TS:Create(bannerLbl, TweenInfo.new(0.7), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play() end
+	end)
+end
+rBanner.OnClientEvent:Connect(showBanner)
+
+-- sons: o "instrumento" e o ping padrao do Roblox em varias alturas (EV.MusicId aceita musica propria)
+local function note(semi, vol)
+	local s = Instance.new("Sound")
+	s.SoundId, s.Volume, s.PlaybackSpeed = EV.NoteSound, vol or 0.35, 2 ^ ((semi + EV.NoteBase) / 12)
+	s.Parent = SoundService
+	s:Play()
+	Debris:AddItem(s, 3)
+end
+local function melody(seq, beat)
+	for _, n in ipairs(seq) do
+		if n[1] then note(n[1]) end
+		task.wait(n[2] * beat)
+	end
+end
+local JINGLE = { { 4, 1 }, { 4, 1 }, { 4, 2 }, { 4, 1 }, { 4, 1 }, { 4, 2 }, { 4, 1 }, { 7, 1 }, { 0, 1.5 }, { 2, 0.5 }, { 4, 4 },
+	{ 5, 1 }, { 5, 1 }, { 5, 1.5 }, { 5, 0.5 }, { 5, 1 }, { 4, 1 }, { 4, 1 }, { 4, 0.5 }, { 4, 0.5 }, { 4, 1 }, { 2, 1 }, { 2, 1 }, { 4, 1 }, { 2, 2 }, { 7, 2 } }
+rSfx.OnClientEvent:Connect(function(kind)
+	if kind == "pick" then
+		note(12, 0.4)
+		task.delay(0.08, note, 16, 0.4)
+	elseif kind == "taco" then
+		task.spawn(melody, { { 0, 0.5 }, { 4, 0.5 }, { 7, 0.5 }, { 12, 1.5 } }, 0.12)
+	elseif kind == "xmas" then
+		task.spawn(melody, JINGLE, 0.22)
+	end
+end)
+
+-- neve local (so aparece no evento de Natal)
+local snowPart, snowEm
+local function setSnow(on)
+	if on and not snowPart then
+		snowPart = Instance.new("Part")
+		snowPart.Anchored, snowPart.CanCollide, snowPart.CanQuery, snowPart.CanTouch, snowPart.Transparency = true, false, false, false, 1
+		snowPart.Size = Vector3.new(90, 1, 90)
+		snowPart.Parent = workspace
+		snowEm = Instance.new("ParticleEmitter")
+		snowEm.Rate, snowEm.Lifetime, snowEm.Speed = 70, NumberRange.new(5, 7), NumberRange.new(6, 10)
+		snowEm.EmissionDirection, snowEm.SpreadAngle = Enum.NormalId.Bottom, Vector2.new(12, 12)
+		snowEm.Size, snowEm.Transparency, snowEm.LightEmission = NumberSequence.new(0.4), NumberSequence.new(0.1), 0.5
+		snowEm.RotSpeed, snowEm.Rotation = NumberRange.new(-60, 60), NumberRange.new(0, 360)
+		snowEm.Parent = snowPart
+	end
+	if snowEm then snowEm.Enabled = on end
+end
+
+-- musica de Natal em loop enquanto o evento estiver ativo
+local xmasMusic
+local musicToken = 0
+local function setXmas(on)
+	setSnow(on)
+	musicToken = musicToken + 1
+	local my = musicToken
+	if xmasMusic then xmasMusic:Destroy() xmasMusic = nil end
+	if not on then return end
+	if EV.MusicId ~= "" then
+		xmasMusic = Instance.new("Sound")
+		xmasMusic.SoundId, xmasMusic.Volume, xmasMusic.Looped, xmasMusic.Parent = EV.MusicId, 0.5, true, SoundService
+		xmasMusic:Play()
+	else
+		task.spawn(function()
+			while musicToken == my do
+				melody(JINGLE, 0.24)
+				task.wait(8)
+			end
+		end)
+	end
+end
+R:GetAttributeChangedSignal("XmasActive"):Connect(function() setXmas(R:GetAttribute("XmasActive") == true) end)
+if R:GetAttribute("XmasActive") == true then
+	setXmas(true)
+	showBanner("MERRY CHRISTMAS!", Color3.fromRGB(255, 90, 90), 6)
+end
+
+-- paineis de contagem (sincronizados pelo relogio do servidor)
+local function countPill(y, color, symbol)
+	local f = mk("Frame", { Size = UDim2.new(0, 330, 0, 30), Position = UDim2.new(0.5, -165, 0, y), BackgroundColor3 = CREAM, Visible = false }, gui)
+	round(f, 15)
+	mk("UIStroke", { Color = color, Thickness = 2 }, f)
+	brick(f, UDim2.new(0, 3, 0, 3), 24, color, symbol)
+	local l = mk("TextLabel", { Size = UDim2.new(1, -38, 1, -6), Position = UDim2.new(0, 34, 0, 3), BackgroundTransparency = 1, TextColor3 = BROWN, Font = FONT, TextScaled = true, Text = "", TextXAlignment = Enum.TextXAlignment.Left }, f)
+	return f, l
+end
+local xmasPill, xmasLbl = countPill(130, Color3.fromRGB(205, 40, 50), "*")
+local tacoPill, tacoLbl = countPill(164, Color3.fromRGB(240, 140, 40), "T")
+local function hms(s)
+	s = math.max(0, math.floor(s))
+	return math.floor(s / 86400), math.floor(s % 86400 / 3600), math.floor(s % 3600 / 60), s % 60
+end
+
+-- tacos caindo (desenhados aqui, posicao decidida pelo servidor)
+local tacoFolder = Instance.new("Folder")
+tacoFolder.Name = "PBTacos"
+tacoFolder.Parent = workspace
+local tacos = {}
+local function burst(pos, colors, n)
+	local p = Instance.new("Part")
+	p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Transparency, p.Size, p.Position = true, false, false, false, 1, Vector3.new(0.5, 0.5, 0.5), pos
+	p.Parent = tacoFolder
+	local e = Instance.new("ParticleEmitter")
+	e.Color, e.Lifetime, e.Speed = ColorSequence.new(colors), NumberRange.new(0.5, 0.9), NumberRange.new(10, 18)
+	e.SpreadAngle, e.Size, e.Rate, e.LightEmission = Vector2.new(180, 180), NumberSequence.new(0.7, 0), 0, 0.4
+	e.Acceleration = Vector3.new(0, -30, 0)
+	e.Parent = p
+	e:Emit(n)
+	Debris:AddItem(p, 1.5)
+end
+local function buildTaco()
+	local m = Instance.new("Model")
+	local function part(sz, off, col)
+		local p = Instance.new("Part")
+		p.Size, p.Color, p.Material, p.Anchored = sz, col, Enum.Material.Plastic, true
+		p.CanCollide, p.CanTouch, p.CanQuery, p.CastShadow = false, false, false, false
+		p.CFrame = CFrame.new(off)
+		for _, f in ipairs({ "TopSurface", "BottomSurface", "LeftSurface", "RightSurface", "FrontSurface", "BackSurface" }) do p[f] = Enum.SurfaceType.Studs end
+		p.Parent = m
+		return p
+	end
+	m.PrimaryPart = part(Vector3.new(2.6, 1.2, 1.6), Vector3.new(0, 0, 0), Color3.fromRGB(245, 200, 70))
+	part(Vector3.new(2.4, 0.35, 1.5), Vector3.new(0, 0.75, 0), Color3.fromRGB(80, 190, 70))
+	part(Vector3.new(1.6, 0.35, 1.0), Vector3.new(0, 1.1, 0), Color3.fromRGB(120, 70, 40))
+	part(Vector3.new(0.6, 0.4, 0.6), Vector3.new(0.6, 1.4, 0), Color3.fromRGB(225, 50, 40))
+	m.Parent = tacoFolder
+	return m
+end
+local function removeTaco(id, pop)
+	local tk = tacos[id]
+	if not tk then return end
+	tacos[id] = nil
+	if pop then
+		burst(Vector3.new(tk.x, 3, tk.z), ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 220, 80)), ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 90, 60)) }), 14)
+	end
+	tk.model:Destroy()
+end
+rTaco.OnClientEvent:Connect(function(kind, id, x, z, fall, born)
+	if kind == "spawn" then
+		tacos[id] = { model = buildTaco(), x = x, z = z, fall = fall, born = born, yaw = (id * 2.4) % 6.28, landed = false }
+	elseif kind == "take" then
+		removeTaco(id, true)
+	end
+end)
+
+local lastBulb = 0
+RunS.RenderStepped:Connect(function()
+	local now = workspace:GetServerTimeNow()
+
+	-- tacos
+	for id, tk in pairs(tacos) do
+		local t = now - tk.born
+		if t > tk.fall + 9 then
+			removeTaco(id, false)
+		else
+			local y, landed = 1.4, t >= tk.fall
+			if not landed then
+				local p = math.max(0, t) / tk.fall
+				y = 80 - 78.6 * p * p
+			end
+			local spin = landed and (tk.fall * 6) or (math.max(0, t) * 6)
+			tk.model:PivotTo(CFrame.new(tk.x, y, tk.z) * CFrame.Angles(0, tk.yaw + spin, 0) * CFrame.Angles(landed and 0 or 0.5, 0, 0))
+			if landed and not tk.landed then
+				tk.landed = true
+				burst(Vector3.new(tk.x, 2, tk.z), ColorSequence.new(Color3.fromRGB(255, 200, 80)), 6)
+			end
+		end
+	end
+
+	-- neve acompanha a camera
+	if snowPart and workspace.CurrentCamera then
+		local c = workspace.CurrentCamera.CFrame.Position
+		snowPart.CFrame = CFrame.new(c.X, c.Y + 32, c.Z)
+	end
+
+	-- luzes decorativas (roda-gigante, arvores): troca de cor a cada 0.4s, tudo local
+	if now - lastBulb > 0.4 then
+		lastBulb = now
+		local step = math.floor(now * 2.5)
+		for i, b in ipairs(CS:GetTagged("PBBulb")) do
+			b.Color = Color3.fromHSV((i * 0.13 + step * 0.21) % 1, 0.85, 1)
+		end
+	end
+
+	-- contagem de Natal
+	local xAt, xEnd = R:GetAttribute("XmasAt"), R:GetAttribute("XmasEnd")
+	if xAt and xEnd then
+		if R:GetAttribute("XmasActive") == true then
+			local _, h, m, s = hms(xEnd - now)
+			xmasPill.Visible = true
+			xmasLbl.Text = string.format("MERRY CHRISTMAS!  ends in %02d:%02d:%02d", h, m, s)
+		elseif now < xAt then
+			local d, h, m, s = hms(xAt - now)
+			xmasPill.Visible = true
+			xmasLbl.Text = string.format("CHRISTMAS IN  %dd %02dh %02dm %02ds", d, h, m, s)
+		else
+			xmasPill.Visible = false
+		end
+	end
+
+	-- contagem do Taco Event
+	local tAt = R:GetAttribute("TacoAt")
+	if R:GetAttribute("TacoLive") == true then
+		tacoPill.Visible = true
+		tacoLbl.Text = string.format("TACO EVENT LIVE!  %ds left", math.max(0, math.ceil((R:GetAttribute("TacoEnd") or now) - now)))
+	elseif tAt then
+		local _, _, m, s = hms(tAt - now)
+		tacoPill.Visible = true
+		tacoLbl.Text = string.format("TACO EVENT IN  %02d:%02d", m, s)
+	end
+end)
+]]></ProtectedString></Properties></Item><Item class="ModuleScript" referent="RBX4"><Properties><string name="Name">PBConfig</string><ProtectedString name="Source"><![CDATA[-- PBConfig (ModuleScript) | vai para ReplicatedStorage automaticamente
+-- Coins = preco em moedas (ganhas nas partidas) | Robux + ProductId = Developer Product
+-- (crie em Creator Dashboard > Monetization > Developer Products e cole o ID em ProductId)
+-- Pattern = textura da bomba: stripes | dots | stars | skull   (Accent = cor da textura)
+local C = {}
+
+C.Skins = {
+	{ Id = "classic", Name = "Classica", Base = Color3.fromRGB(25, 25, 30), Flash = Color3.fromRGB(255, 40, 30) },
+	{ Id = "capybara", Name = "Capivara", Free = true, Base = Color3.fromRGB(156, 110, 72), Flash = Color3.fromRGB(255, 150, 40), Fuse = Color3.fromRGB(60, 160, 70), Pattern = "dots", Accent = Color3.fromRGB(115, 78, 48) },
+	{ Id = "melon", Name = "Melancia", Coins = 100, Base = Color3.fromRGB(40, 150, 60), Flash = Color3.fromRGB(255, 70, 90), Fuse = Color3.fromRGB(255, 255, 255), Pattern = "stripes", Accent = Color3.fromRGB(20, 90, 35) },
+	{ Id = "ice", Name = "Gelo", Coins = 250, Base = Color3.fromRGB(150, 220, 255), Flash = Color3.fromRGB(255, 255, 255), Mat = Enum.Material.Glass, Effect = "sparkles", Pattern = "dots", Accent = Color3.fromRGB(255, 255, 255) },
+	{ Id = "burger", Name = "Hamburguer", Coins = 500, Base = Color3.fromRGB(215, 150, 70), Flash = Color3.fromRGB(255, 220, 120), Pattern = "dots", Accent = Color3.fromRGB(250, 235, 200) },
+	{ Id = "pink", Name = "Chiclete", Coins = 400, Robux = 39, ProductId = 0, Base = Color3.fromRGB(255, 130, 200), Flash = Color3.fromRGB(255, 255, 120), Pattern = "dots", Accent = Color3.fromRGB(255, 255, 255) },
+	{ Id = "skull", Name = "Caveira", Coins = 600, Base = Color3.fromRGB(238, 238, 228), Flash = Color3.fromRGB(255, 60, 60), Pattern = "skull", Accent = Color3.fromRGB(25, 25, 30) },
+	{ Id = "brasil", Name = "Brasil", Coins = 700, Robux = 59, ProductId = 0, Base = Color3.fromRGB(0, 156, 59), Flash = Color3.fromRGB(254, 223, 0), Fuse = Color3.fromRGB(254, 223, 0), Pattern = "stripes", Accent = Color3.fromRGB(254, 223, 0) },
+	{ Id = "gold", Name = "Ouro", Coins = 800, Robux = 79, ProductId = 0, Base = Color3.fromRGB(255, 199, 40), Flash = Color3.fromRGB(255, 255, 255), Mat = Enum.Material.Metal, Effect = "sparkles", Pattern = "stripes", Accent = Color3.fromRGB(200, 140, 20) },
+	{ Id = "dino", Name = "Dino", Coins = 900, Robux = 69, ProductId = 0, Base = Color3.fromRGB(70, 160, 60), Flash = Color3.fromRGB(255, 230, 80), Pattern = "dots", Accent = Color3.fromRGB(40, 100, 35) },
+	{ Id = "galaxy", Name = "Galaxia", Coins = 1500, Robux = 99, ProductId = 0, Base = Color3.fromRGB(60, 30, 120), Flash = Color3.fromRGB(190, 110, 255), Effect = "sparkles", Pattern = "stars", Accent = Color3.fromRGB(255, 255, 160) },
+	{ Id = "rainbow", Name = "Arco-iris", Coins = 3000, Robux = 199, ProductId = 0, Base = Color3.fromRGB(255, 255, 255), Flash = Color3.fromRGB(255, 255, 255), Rainbow = true, Pattern = "stars", Accent = Color3.fromRGB(255, 255, 255) },
+	{ Id = "dragon", Name = "Dragao", Coins = 5000, Robux = 299, ProductId = 0, Base = Color3.fromRGB(120, 20, 20), Flash = Color3.fromRGB(255, 160, 40), Effect = "fire", Pattern = "dots", Accent = Color3.fromRGB(255, 160, 40) },
+}
+
+-- Pacotes de moedas (Robux)
+C.CoinPacks = {
+	{ Id = "p1", Name = "Punhado de Moedas", Coins = 500,   Robux = 25,  ProductId = 0 },
+	{ Id = "p2", Name = "Saco de Moedas",    Coins = 2500,  Robux = 99,  ProductId = 0 },
+	{ Id = "p3", Name = "Bau de Moedas",     Coins = 10000, Robux = 299, ProductId = 0 },
+}
+
+-- Combo de hamburgueres duplos do Chef (Robux): super velocidade na partida
+C.BurgerPack = { Name = "Combo 3 Hamburgueres Duplos", Count = 3, Robux = 39, ProductId = 0 }
+
+-- Eventos (Taco Event a cada 10 min + contagem e evento de Natal)
+C.Events = {
+	TacoInterval = 600,        -- segundos entre Taco Events (teste rapido: 30)
+	TacoDuration = 30,         -- duracao do evento
+	TacoRate = 3,              -- tacos por segundo
+	TacoCoins = 2,             -- moedas por taco coletado
+	TacoMaxPerPlayer = 30,     -- limite por jogador em cada evento
+	ChristmasYear = 2026, ChristmasMonth = 12, ChristmasDay = 25,
+	UtcOffsetHours = 0,        -- fuso: 0 = meia-noite UTC; -3 = meia-noite em Brasilia
+	ChristmasDuration = 24 * 3600, -- quanto tempo o evento de Natal fica ativo
+	TestChristmas = false,     -- true: o Natal comeca 20s apos o servidor abrir e dura 3 min (para testar no Studio)
+	MusicId = "",              -- opcional: rbxassetid://... de uma musica de Natal sua (se vazio, toca "Jingle Bells" gerado com notas)
+	NoteSound = "rbxasset://sounds/electronicpingshort.wav",
+	NoteBase = -5,             -- afinacao do som de notas
+}
+
+return C
+]]></ProtectedString></Properties></Item></Item></Item></roblox>
